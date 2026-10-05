@@ -149,6 +149,56 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   eq(r4.scenes[0].lines[0], { s: '朗', t: '喂！你好', r: '（笑）喂！（揮手）你好' }, '前綴指示＋內嵌指示 → r 保留原文');
 }
 
+
+// ---- 前綴優先：偵測與覆寫 ----
+{
+  const L = (n, text) => ({ n, text });
+  const mk = arr => arr.map((t, i) => L(i + 1, t));
+  const rl = (...ids) => ids.map(id => ({ id, name: id, aliases: [], gender: 'n' }));
+  // 中文冒號格式：模型漏掉的角色（媽）補上；合說「兄／妹：」逐個計數，不會變成一個叫「兄／妹」的角色
+  const zh = [];
+  for (let i = 0; i < 8; i++) zh.push('兄：甲' + i, '妹：乙' + i);
+  for (let i = 0; i < 6; i++) zh.push('媽：丙' + i);
+  zh.push('兄／妹：丁', '（燈暗）', '走到窗邊。');
+  const d1 = T.detectPrefix(mk(zh), rl('兄', '妹'));
+  ok(d1.on && d1.added.join() === '媽' && d1.roles.map(r => r.id).join() === '兄,妹,媽', '前綴格式：補上模型漏掉的角色');
+  ok(d1.prefixLines === 23, '前綴行數（合說算一行）：' + d1.prefixLines);
+  // 太少見的稱呼（3 次）不補成角色
+  eq(T.detectPrefix(mk(zh.filter(x => !/^媽：丙[345]/.test(x))), rl('兄', '妹')).added, [], '只出現 3 次的稱呼不補成角色');
+  // 英文破折號格式：偶然出現的「Well – 」不當角色；網址不當角色
+  const en = [];
+  for (let i = 0; i < 12; i++) en.push('Madison – line ' + i, 'Alexandre – reply ' + i);
+  en.push('Well – maybe.', 'Well – no.', 'Well – yes.', 'https://example.org/a', 'https://example.org/b', 'https://example.org/c');
+  const d2 = T.detectPrefix(mk(en), rl('Madison'));
+  ok(d2.on && d2.added.join() === 'Alexandre', '英文破折號：補 Alexandre，不補 Well／https：' + JSON.stringify(d2.added));
+  // 不是前綴格式 → 關閉，一切照舊
+  const own = []; for (let i = 0; i < 30; i++) own.push(i % 2 ? '兄' : '妹', '這是第' + i + '句，沒有冒號'); 
+  eq(T.detectPrefix(mk(own), rl('兄', '妹')).on, false, '角色名獨立成行的劇本：不啟用');
+  const few = ['兄：甲', '妹：乙', '兄：丙']; for (let i = 0; i < 40; i++) few.push('第' + i + '行描述文字');
+  eq(T.detectPrefix(mk(few), rl('兄', '妹')).on, false, '前綴行太少（<10 行或 <25%）：不啟用');
+  const time = []; for (let i = 0; i < 20; i++) time.push('12:30 見', '第' + i + '段敘述文字');
+  time.push('他說：好', '他說：不', '他說：嗯', '他說：行');
+  eq(T.detectPrefix(mk(time), rl('兄')).on, false, '時間、敘述文字裡偶爾的「他說：」不啟用');
+
+  // applyPrefix：有前綴 → 強制台詞；沒前綴卻標成台詞 → 規則標並待校正；夾著別人前綴 → 待校正
+  const lines = mk(['兄：你好', '妹：（笑）喂。', '意識到妹後停止動作。', '兄：我只是忍不住。妹：人就要有人樣。', '兄／妹：（同時）好餓', '（燈暗）']);
+  const roles2 = rl('兄', '妹');
+  const labels = new Map([[1, { label: 'C', role: '' }], [2, { label: 'N', role: '' }], [3, { label: 'S', role: '兄' }], [4, { label: 'C', role: '' }], [5, { label: 'S', role: '妹' }], [6, { label: 'D', role: '' }]]);
+  const st = T.applyPrefix(lines, labels, roles2);
+  eq([1, 2, 5].map(n => labels.get(n)), [{ label: 'S', role: '兄' }, { label: 'S', role: '妹' }, { label: 'S', role: '兄/妹' }], '前綴行強制為台詞，角色以前綴為準（含合說）');
+  eq(labels.get(3), { label: 'D', role: '', rv: true }, '沒有前綴卻被標成台詞的行：改用規則標，並標為待校正');
+  eq(labels.get(4), { label: 'S', role: '兄', rv: true }, '前綴被標成續行 → 強制台詞；夾著別人前綴 → 待校正');
+  eq(labels.get(6), { label: 'D', role: '' }, '正常的指示不動');
+  eq(st, { forced: 4, demoted: 1, flagged: 1 }, '統計：' + JSON.stringify(st));
+  // 模型標對的行完全不動（連物件都不換）
+  const good = new Map([[1, { label: 'S', role: '兄' }]]); const ref = good.get(1);
+  T.applyPrefix(mk(['兄：你好']), good, roles2);
+  ok(good.get(1) === ref, '標對的行不動');
+  // 「（指示）角色名：」常見寫法不算夾帶前綴，也不被強制改標
+  const lab2 = new Map([[1, { label: 'D', role: '' }]]);
+  eq(T.applyPrefix(mk(['（二人靜默） 兄： 好']), lab2, roles2), { forced: 0, demoted: 0, flagged: 0 }, '指示在前、角色名在後：交給模型，不強制');
+}
+
 (async () => {
   const vs = Object.fromEntries(variants().map(v => [v.id, v]));
   const run = (id, mockOpts, extra) => {
@@ -200,6 +250,62 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     await new Promise(r => setTimeout(r, 20));      // 讓還在飛的請求跑完
     eq(events.length, failedAt, 'fatal 之後不再回報進度（否則會蓋掉錯誤畫面）');
     ok(mock.calls.format + mock.calls.label <= 3 + 3, '遇到 fatal 後不再派發新塊（共 ' + (mock.calls.format + mock.calls.label) + ' 次請求，劇本有 7 塊）');
+  }
+
+  // 前綴優先（本次真實檔案暴露的問題）：模型把「兄：…」標成續行／雜訊、把舞台指示標成台詞、編出錯的角色名與 speaker_pos。
+  // 劇本內容為自編的合成文字。
+  {
+    const gold = [['第一場　廚房', 'H', ''], ['（燈亮。兄蹲在冰箱前面翻東西。）', 'D', '']];
+    for (let i = 0; i < 6; i++) {
+      gold.push(['兄：第' + i + '個問題是冰箱裡什麼都沒有', 'S', '兄']);
+      gold.push(['妹：昨天不是才買過菜嗎', 'S', '妹']);
+    }
+    gold.push(['兄：買是買了，可是你把雞蛋都', 'S', '兄'], ['吃光了。', 'C', ''], ['妹站起來，走到流理台前面看了一眼。', 'D', ''],
+      ['兄：兩顆？盒子是空的。妹：那是你自己吃的。', 'S', '兄'], ['兄／妹：（同時）好餓。', 'S', '兄/妹']);
+    for (let i = 0; i < 4; i++) gold.push(['妹：第' + i + '次了', 'S', '妹'], ['兄：我知道', 'S', '兄']);
+    const lines = T.buildLines({ text: gold.map(g => g[0]).join('\n') }).lines;
+    eq(lines.length, gold.length, '合成劇本逐行對應');
+    let k = 0;
+    const badModel = async p => {
+      if (p.mode === 'format') return JSON.stringify({ roles: [{ id: '兄', name: '格', aliases: ['立朗'] }, { id: '妹', name: '眉' }, { id: '麻', name: '拔' }], rules: { speaker_pos: 'own_line' } });
+      sent.push(p.rules.speaker_pos);
+      return p.lines.map(([n, text]) => {
+        if (/^[兄妹]／?[兄妹]?：/.test(text)) { k++; return k % 3 === 0 ? n + '|C|' : k % 3 === 1 ? n + '|N|' : n + '|S|妹'; }   // 前綴行被標成續行／雜訊／錯的角色
+        if (/^（燈亮|^妹站起來/.test(text)) return n + '|S|兄';                                                                  // 舞台指示被標成台詞
+        const g = gold[n - 1]; return n + '|' + g[1] + '|' + g[2];
+      }).join('\n');
+    };
+    const sent = [];
+    const r = await T.runPipeline({ lines, callApi: badModel, concurrency: 1 });
+    const bad = lines.filter((l, i) => { const g = gold[i], p = r.labels.get(l.n); return g[1] === 'S' ? !(p.label === 'S' && p.role === g[2]) : p.label !== g[1]; });
+    eq(bad.map(l => l.text), [], '壞模型 + 前綴優先：每一行的標記都回到正確（台詞角色、指示、續行、標題）');
+    ok(r.stats.prefix && r.stats.prefix.forced > 10 && r.stats.prefix.demoted === 2 && r.stats.prefix.flagged === 1, '覆寫統計：' + JSON.stringify(r.stats.prefix));
+    ok(sent.length > 0 && sent.every(x => /^prefix/.test(x)), '送給標記步驟的 speaker_pos 已改為 prefix（不沿用模型判錯的 own_line）：' + sent[0]);
+    const sl = r.scenes.flatMap(s => s.lines).filter(l => l.s !== undefined);
+    ok(sl.length === gold.filter(g => g[1] === 'S').length, '台詞數 = 前綴行數：' + sl.length);
+    ok(!sl.some(l => /[兄妹]：/.test(l.t) && l.rv !== true), '沒有夾帶別人前綴卻未標待校正的台詞');
+    eq(r.stats.review, 3, '待校正只有：2 行被降級的指示 + 1 行夾帶前綴的台詞（實際 ' + r.stats.review + '）');
+    eq(r.roles.map(x => [x.id, x.name]), [['兄', '格'], ['妹', '眉'], ['麻', '拔']], '不去改角色清單與名稱（無法由文字驗證，留給校正頁）');
+  }
+  // 英文破折號：模型漏掉 Alexandre → 由前綴補上；壞標記同樣被修正
+  {
+    const gold = [];
+    for (let i = 0; i < 8; i++) gold.push(['Madison – line number ' + i + ' goes here.', 'S', 'Madison'], ['Alexandre – reply number ' + i + ' goes here.', 'S', 'Alexandre']);
+    gold.push(['Madison – Yes.', 'S', 'Madison'], ['She takes a few steps into the room.', 'D', ''], ['Alexandre – Well – I do not know.', 'S', 'Alexandre']);
+    const lines = T.buildLines({ text: gold.map(g => g[0]).join('\n') }).lines;
+    const model = async p => p.mode === 'format'
+      ? JSON.stringify({ roles: [{ id: 'Madison', name: 'Madison', aliases: [] }], rules: { speaker_pos: 'own_line' } })
+      : p.lines.map(([n, text]) => n + '|' + (/^Alexandre/.test(text) ? 'C|' : /^She/.test(text) ? 'S|Madison' : 'S|Madison')).join('\n');
+    const r = await T.runPipeline({ lines, callApi: model, concurrency: 1 });
+    eq(r.roles.map(x => x.id), ['Madison', 'Alexandre'], '漏掉的角色由前綴補上');
+    const ok1 = lines.every((l, i) => { const p = r.labels.get(l.n), g = gold[i]; return g[1] === 'S' ? p.label === 'S' && p.role === g[2] : p.label === g[1]; });
+    ok(ok1, '英文：壞模型標記全部被前綴規則修正');
+  }
+  // 標記對的模型在前綴劇本上不受影響：不強制、不降級、不新增待校正
+  {
+    const { r } = await run('colon-fw', {});
+    ok(r.stats.prefix && r.stats.prefix.forced === 0 && r.stats.prefix.demoted === 0 && r.stats.prefix.flagged === 0, '完美模型：前綴覆寫一行都不動：' + JSON.stringify(r.stats.prefix));
+    eq((await run('centered', {})).r.stats.prefix, null, '角色名獨立成行的劇本不啟用前綴模式');
   }
   // 進度回報
   {

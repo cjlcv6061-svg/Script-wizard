@@ -1694,6 +1694,76 @@ const TSP=(function(){
     return true;
   }
 
+  // ---------- 前綴優先：說話者寫在行首時，由規則決定，不由模型決定 ----------
+  // 很多劇本每句台詞都以「兄：」「Madison – 」開頭。這種格式的說話者是文字本身寫明的，
+  // 模型卻可能把這種行標成續行或雜訊、把舞台指示標成台詞。
+  // 所以：先數行首前綴（補上模型漏掉的角色），標記完成後再用前綴覆寫模型標錯的行。
+  // 角色的顯示名稱無法由文字驗證，不去改它（校正頁可改）。
+  const PFX_CJK='[^\\sA-Za-z0-9：:–—（(，。、！？!?"“”「」『』….\\/／&＆]{1,8}';
+  const PFX_LAT="[A-Za-z][A-Za-z.'’-]*(?: [A-Za-z][A-Za-z.'’-]*){0,2}";
+  const PFX_TOK='(?:'+PFX_CJK+'|'+PFX_LAT+')';
+  // 行首「角色名（指示）：」「角色名 – 」；合說「偉、朗：」「玲／朗／K：」「A and B – 」整串算一個前綴
+  const PFX_RE=new RegExp('^('+PFX_TOK+'(?:\\s*(?:[、,，\\/／&＆]|\\s+and\\s+)\\s*'+PFX_TOK+')*)(?:\\s*[（(][^）)]{0,20}[）)])?(?:\\s*[：:]\\s*\\S|\\s[–—-]\\s+\\S)');
+  // 句尾之後又冒出「角色名：」＝兩句台詞被併成一行（或抽取時折行錯位）。「（指示）角色名：」是常見寫法，不算
+  const INLINE_PFX_RE=new RegExp('[。！？…!?」”]\\s*('+PFX_CJK+'|'+PFX_LAT+')\\s*(?:[：:]|\\s[–—-]\\s)','g');
+  function hasInlinePrefix(text, surf){
+    INLINE_PFX_RE.lastIndex=0;
+    for(let m; (m=INLINE_PFX_RE.exec(text)); ) if(surfGet(surf,m[1].trim())) return true;
+    return false;
+  }
+  // 回傳 {on, roles, prefixLines, added}。on=false 表示這份劇本不是「行首前綴」格式，一切照舊。
+  function detectPrefix(lines, roles){
+    const surf=buildSurfaceMap(roles), cnt=new Map(), parts=l=>{
+      const m=l.text.match(PFX_RE); if(!m) return [];
+      const ts=m[1].split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
+      return ts.some(t=>/^https?$/i.test(t))?[]:ts;
+    };
+    let body=0;
+    for(const l of lines){
+      if(isPageNumberLine(l.text,false)) continue;
+      body++;
+      for(const t of parts(l)) cnt.set(t,(cnt.get(t)||0)+1);
+    }
+    let sum=0; for(const [t,c] of cnt) if(surfGet(surf,t)||c>=3) sum+=c;
+    // 模型沒列出的稱呼要夠常見才補成角色（誤補會讓一般句子被強制標成台詞，比漏補嚴重）：排除偶然出現的「Well – 」「他說：」
+    const minCount=Math.max(5,Math.ceil(sum*0.05));
+    const isRole=t=>surfGet(surf,t)||cnt.get(t)>=minCount;
+    let prefixLines=0; for(const l of lines){ const ts=parts(l); if(ts.length && ts.every(isRole)) prefixLines++; }
+    if(prefixLines<Math.max(10,Math.ceil(body*0.25))) return {on:false, prefixLines};
+    const toks=[...cnt].filter(([t])=>isRole(t));
+    const out=roles.map(r=>Object.assign({},r)), added=[];
+    const surf2=buildSurfaceMap(out);
+    for(const [t] of toks){
+      if(surfGet(surf2,t)) continue;
+      const id=cleanId(t); if(!id || id!==t || surfGet(surf2,id)) continue;
+      out.push({id, name:id, aliases:[], gender:'n'}); added.push(id);
+    }
+    return {on:true, roles:out, prefixLines, added};
+  }
+  // 標記完成後套用：有已知前綴的行一律是台詞；沒有前綴卻被標成台詞的行改用規則標並標為待校正；
+  // 夾著別人前綴的行標為待校正。labels 會被就地修改。
+  function applyPrefix(lines, labels, roles){
+    const surf=buildSurfaceMap(roles), H=heuristicLabels(lines, roles, false);
+    const st={forced:0, demoted:0, flagged:0};
+    for(const l of lines){
+      const cur=labels.get(l.n);
+      const sp=PFX_RE.test(l.text)?splitSpeakerPrefix(l.text,surf):null;      // 前綴必須真的在行首（「（指示）玲：…」不算）
+      let probe=l.text;
+      if(sp){
+        const role=sp.ids.filter((x,i,a)=>a.indexOf(x)===i).join('/');
+        if(!cur || cur.label!=='S' || cur.role!==role){ labels.set(l.n,{label:'S',role}); st.forced++; }
+        probe=sp.rest;
+      }else if(cur && cur.label==='S' && !PFX_RE.test(l.text)){
+        const h=H.get(l.n);
+        labels.set(l.n,{label:h.label, role:h.role||'', rv:true}); st.demoted++;
+        continue;
+      }
+      const fin=labels.get(l.n);
+      if(fin && !fin.rv && fin.label!=='N' && fin.label!=='H' && hasInlinePrefix(probe,surf)){ labels.set(l.n,Object.assign({},fin,{rv:true})); st.flagged++; }
+    }
+    return st;
+  }
+
   // ---------- 組回（規格 5.3）：依行號，C 併入前一個 S，H 開新場景，N 丟棄（保留為 {x}）----------
   // 折行接回：兩邊都是半形字元（英文等）時補一個空白；中文不補
   const joinParts=(a,b)=>!a?b:(/[!-~]$/.test(a)&&/^[!-~]/.test(b))?a+' '+b:a+b;
@@ -1772,6 +1842,9 @@ const TSP=(function(){
       catch(e){ if(e && e.fatal) throw e; lastErr=e; }
     }
     if(!fmt) throw new Error('無法辨識劇本格式：'+(lastErr&&lastErr.message||'未知錯誤'));
+    // 前綴優先：行首是「角色名：」的劇本，角色表以文字本身為準（模型的 speaker_pos／角色名常判錯）
+    const pm=detectPrefix(lines, fmt.roles);
+    if(pm.on) fmt={roles:pm.roles, rules:Object.assign({},fmt.rules,{speaker_pos:'prefix（行首「角色名：」或「角色名 – 」，同一行內接著台詞）'})};
     prog({stage:'format',done:1,total:1,roles:fmt.roles.length});
 
     const compactRoles=fmt.roles.map(r=>({id:r.id,name:r.name,aliases:r.aliases}));
@@ -1806,13 +1879,15 @@ const TSP=(function(){
         try{ await doChunk(ci); }catch(e){ aborted=true; throw e; }     // fatal：不再派發新塊，免得白白耗掉每日額度
       }
     }));
+    const pfx=pm.on?applyPrefix(lines, labels, fmt.roles):null;
     const asm=assemble(lines, labels, fmt.roles);
     const roles=fmt.roles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
     return {roles, rules:fmt.rules, scenes:asm.scenes, labels,
-      stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), retried, lines:lines.length}, asm.stats), errors};
+      stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), retried, lines:lines.length}, asm.stats,
+        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added}, pfx):null}), errors};
   }
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 
