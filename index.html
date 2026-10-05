@@ -1323,7 +1323,316 @@ const TSP=(function(){
   // 傳給 Worker 的格式：[[n,"text"],…]
   const toWire=lines=>lines.map(l=>[l.n,l.text]);
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  // ---------- 兩段式標記：切塊 ----------
+  // 每塊核心約 size 行，前後各多送 overlap 行當上下文（只採用核心範圍的標記）。
+  function chunkLines(lines, size, overlap){
+    size=size||300; overlap=overlap==null?10:overlap;
+    const out=[];
+    for(let s=0;s<lines.length;s+=size) out.push({start:s,end:Math.min(lines.length,s+size)});
+    // 最後一塊太小就併回前一塊（核心最多 size+30，仍在 Worker 單次 400 行上限內）
+    if(out.length>1 && out[out.length-1].end-out[out.length-1].start<30){
+      const last=out.pop(); out[out.length-1].end=last.end;
+    }
+    out.forEach(c=>{ c.from=Math.max(0,c.start-overlap); c.to=Math.min(lines.length,c.end+overlap); });
+    return out;
+  }
+  // 第一段（格式歸納）送的樣本：前 200 行；劇本更長時再均勻取 5 個 40 行片段，
+  // 讓只在中後段登場的角色也進得了角色清單（總共不超過 Worker 的 400 行上限）。
+  function sampleForFormat(lines){
+    const HEAD=200, WIN=40, WINS=5, CAP=400;
+    if(lines.length<=CAP) return lines.slice();
+    const out=lines.slice(0,HEAD), rest=lines.length-HEAD;
+    const seen=new Set(out.map(l=>l.n));
+    for(let k=0;k<WINS;k++){
+      const s=HEAD+Math.floor((rest-WIN)*k/(WINS-1));
+      for(const l of lines.slice(s,s+WIN)) if(!seen.has(l.n)){ seen.add(l.n); out.push(l); }
+    }
+    return out;
+  }
+
+  // ---------- 回應解析與一致性檢查 ----------
+  const cleanId=x=>String(x==null?'':x).trim().replace(/[<>&"'\/]/g,'');
+  const strOf=(v,n)=>typeof v==='string'?v.trim().slice(0,n):'';
+  // 第一段回應 → {roles, rules}；格式不對就丟錯（呼叫端會重試一次）
+  function parseFormat(content){
+    let j=content;
+    if(typeof content==='string'){
+      const t=content.replace(/^\s*```[a-z]*\s*|\s*```\s*$/gi,'').trim();
+      try{ j=JSON.parse(t); }
+      catch(e){
+        const a=t.indexOf('{'), b=t.lastIndexOf('}');
+        if(a<0||b<=a) throw new Error('格式回應不是 JSON');
+        j=JSON.parse(t.slice(a,b+1));
+      }
+    }
+    if(!j || !Array.isArray(j.roles)) throw new Error('格式回應缺少 roles');
+    const seen=new Set(), roles=[];
+    for(const r of j.roles){
+      if(!r || typeof r!=='object') continue;
+      const id=cleanId(r.id);
+      if(!id || seen.has(id)) continue;
+      seen.add(id);
+      const aliases=[]; for(const a of (Array.isArray(r.aliases)?r.aliases:[])){ const s=strOf(a,40); if(s && s!==id && !aliases.includes(s)) aliases.push(s); }
+      roles.push({id, name:strOf(r.name,40)||id, aliases, gender:(r.gender==='m'||r.gender==='f')?r.gender:'n'});
+    }
+    if(!roles.length) throw new Error('沒有辨識到任何角色');
+    const rules={}; for(const k of ['speaker_pos','direction','heading','noise','notes']) rules[k]=strOf(j.rules&&j.rules[k],200);
+    return {roles, rules};
+  }
+  // 稱呼 → 角色 id（id 優先，其次全名，最後別名；同一稱呼先到先得）
+  function buildSurfaceMap(roles){
+    const m=new Map();
+    for(const r of roles) if(!m.has(r.id)) m.set(r.id,r.id);
+    for(const r of roles) if(r.name && !m.has(r.name)) m.set(r.name,r.id);
+    for(const r of roles) for(const a of (r.aliases||[])) if(a && !m.has(a)) m.set(a,r.id);
+    return m;
+  }
+  // 第二段回應（逐行「行號|標籤|角色」）→ {map:Map(n→{label,role}), dup:[n], bad:[行]}
+  function parseLabels(text){
+    const map=new Map(), dup=[], bad=[];
+    for(const raw of String(text||'').split(/\r\n|\r|\n/)){
+      const t=raw.trim();
+      if(!t || /^```/.test(t)) continue;
+      const m=t.match(/^L?(\d+)\s*[|｜]\s*([A-Za-z])\s*(?:[|｜]\s*(.*))?$/);
+      if(!m){ bad.push(t.slice(0,40)); continue; }
+      const n=+m[1];
+      if(map.has(n)){ dup.push(n); continue; }
+      map.set(n,{label:m[2].toUpperCase(), role:(m[3]||'').trim()});
+    }
+    return {map,dup,bad};
+  }
+  // 規格 5.3：每個輸入行恰好標一次；標籤須在集合內；S 的角色須在角色清單內。
+  // 角色欄寫成別名時對回 id（無損的容錯）。回傳錯誤清單（空＝通過）。
+  function validateLabels(parsed, sentNums, roles){
+    const errors=[], sent=new Set(sentNums), surf=buildSurfaceMap(roles);
+    for(const n of parsed.dup) errors.push('重複 L'+n);
+    for(const n of sentNums) if(!parsed.map.has(n)) errors.push('缺漏 L'+n);
+    for(const [n,v] of parsed.map){
+      if(!sent.has(n)){ errors.push('多出 L'+n); continue; }
+      if('SCDHN'.indexOf(v.label)<0 || v.label.length!==1){ errors.push('標籤不在集合內 L'+n+'：'+v.label); continue; }
+      if(v.label==='S'){
+        const ids=v.role.split(/\s*[\/／]\s*/).map(x=>x.trim()).filter(Boolean).map(x=>surf.get(x));
+        if(!ids.length || ids.some(x=>!x)) errors.push('角色不在清單內 L'+n+'：'+v.role);
+        else v.role=ids.filter((x,i)=>ids.indexOf(x)===i).join('/');
+      }else v.role='';
+    }
+    return errors;
+  }
+
+  // ---------- 本機規則：內嵌指示、日文標記、說話者前綴、場次標題 ----------
+  const PAREN_RE=/[（(][^（）()]*[）)]/g;
+  // 規格 4：台詞中的（…）／(…) 從 t 移除；有移除時 r 保留含指示的原文
+  function stripDirections(text){
+    let t=text, had=false, prev;
+    do{ prev=t; t=t.replace(PAREN_RE,()=>{had=true; return '';}); }while(t!==prev);
+    if(had) t=t.replace(/[ \t　]{2,}/g,' ').trim();
+    return {t, had};
+  }
+
+  // 日文語音標記 ⟦…⟧（只標 t；規格 3：連續假名／日文段落，本機規則，不靠 LLM）。
+  // 以《離地》既有標記校準：假名為核心；夾在假名之間的漢字、拉丁字、標點併入；
+  // 前方漢字只在起首是「送假名」型平假名時併入（お／ご 開頭是敬語前綴，前面多半是粵語）；
+  // 後方漢字只在其後仍接日文、或剛好結尾時併入（避免把「⟦夏休み⟧一齊去鬼屋」的粵語吞進去）。
+  const KANA_RE=/[ぁ-ゟ゠-ヿㇰ-ㇿｦ-ﾟ]/;
+  const HIRA_RE=/[ぁ-ゟ]/;
+  const HAN_RE=/[一-龥㐀-䶿豈-﫿々]/;
+  const CONN_RE=/[〜～]/;
+  const TILDE_RE=/~/;
+  const PUNCT_RE=/[、。！？!?，,…‥「」『』\s　]/;
+  const LATIN_RE=/[A-Za-z0-9]/;
+  function markJapanese(t){
+    if(!t || t.indexOf('⟦')>=0 || !KANA_RE.test(t)) return t;
+    const a=Array.from(t), n=a.length;
+    const cls=a.map(c=>KANA_RE.test(c)?'k':CONN_RE.test(c)?'c':TILDE_RE.test(c)?'t':HAN_RE.test(c)?'h':PUNCT_RE.test(c)?'p':LATIN_RE.test(c)?'l':'o');
+    const spans=[];
+    let i=0, prevEnd=0;
+    while(i<n){
+      if(cls[i]!=='k'){ i++; continue; }
+      let s=i, e=i+1;
+      for(;;){                                   // 向右延伸
+        const c=cls[e];
+        if(c==='k'||c==='c'||c==='t'){ e++; continue; }
+        if(c==='p'||c==='l'||c==='h'){
+          // 之間若夾了東西，必須是「標點／拉丁字／空白」＋「緊貼後面日文的 ≤3 個漢字」，之後接回假名；
+          // 漢字不能緊跟標點之後再接標點（「大丈夫」可，「呢？」不可），以免把粵語字吞進去
+          let k=e, ok=true;
+          while(k<n && (cls[k]==='p'||cls[k]==='l')){ if(k-e>16){ ok=false; break; } k++; }
+          let han=0; while(ok && k<n && cls[k]==='h'){ if(++han>3){ ok=false; break; } k++; }
+          if(ok && k<n && (cls[k]==='k'||cls[k]==='c')){ e=k; continue; }
+        }
+        break;
+      }
+      if(HIRA_RE.test(a[s]) && a[s]!=='お' && a[s]!=='ご'){                 // 向左：送假名型起首才吃前面的漢字（≤2）
+        let b=s, cnt=0;
+        while(b>prevEnd && cls[b-1]==='h' && cnt<2){ b--; cnt++; }
+        s=b;
+      }
+      if(/[、。！？!?]/.test(a.slice(s,e).join('')))                         // 多句才把尾端的 。！？ 一併收進來
+        while(e<n && /[。！？!?]/.test(a[e])) e++;
+      spans.push([s,e]); prevEnd=e; i=e;
+    }
+    let out='', pos=0;
+    for(const [s,e] of spans){ out+=a.slice(pos,s).join('')+'⟦'+a.slice(s,e).join('')+'⟧'; pos=e; }
+    return out+a.slice(pos).join('');
+  }
+
+  // 說話者前綴：「偉：…」「偉（低聲）：…」「偉、朗：…」「Kumi: …」。
+  // 前綴每個稱呼都必須是已知角色稱呼才剝除，避免把台詞裡的冒號當成前綴。
+  const SPK_SEP=/[、,，\/／&＆和與及]/;
+  function splitSpeakerPrefix(text, surf){
+    const m=text.match(/^([^：:]{1,40}?)\s*[：:]\s*/);
+    if(m){
+      let dirs='';
+      const name=m[1].replace(/[（(][^）)]*[）)]/g,d=>{ dirs+=d; return ''; }).trim();
+      const toks=name.split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
+      if(toks.length && toks.every(x=>surf.has(x))) return {rest:text.slice(m[0].length), pre:m[0], dir:dirs, ids:toks.map(x=>surf.get(x))};
+    }
+    return null;
+  }
+  // 場次標題 → {no,name,season,place}（啟發式；使用者可在校正頁修正）
+  const SCENE_NO_RE=/^(序場|序幕|序章|楔子|尾聲|終場|終幕|第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節]|(?:scene|act)\s*[0-9ivx]+)/i;
+  const SEASON_RE=/^[『「（(【\[][^』」）)】\]]{1,6}[』」）)】\]]$/;
+  function parseHeading(text){
+    let t=String(text||'').replace(/^[=＝\-—\s　*#]+|[=＝\-—\s　*#]+$/g,'');
+    const out={no:'',name:'',season:'',place:''};
+    const m=t.match(SCENE_NO_RE);
+    if(m){ out.no=m[0].replace(/\s+/g,''); t=t.slice(m[0].length); }
+    const toks=t.split(/[\s　]+/).filter(k=>k && !/^[=＝\-—*#]+$/.test(k));   // 去掉裝飾用的 === 之類
+    const rest=[];
+    for(const k of toks){ if(!out.season && SEASON_RE.test(k)) out.season=k; else rest.push(k); }
+    if(rest.length){ out.name=rest[0]; out.place=rest.slice(1).join(' '); }
+    if(!m && !out.season && toks.length) { out.no=''; out.name=toks.join(' '); out.place=''; }
+    return out;
+  }
+
+  // ---------- 啟發式標記（不靠 LLM）：LLM 整塊失敗時的後備，也是評測的基準線 ----------
+  function heuristicLabels(lines, roles, flag){
+    const surf=buildSurfaceMap(roles);
+    const names=[...surf.keys()].sort((a,b)=>b.length-a.length);
+    const map=new Map();
+    let pending=null, prev='N';
+    const put=(n,label,role)=>{ const v={label,role:role||''}; if(flag) v.rv=true; map.set(n,v); prev=label; };
+    for(const L of lines){
+      const t=L.text;
+      if(SCENE_NO_RE.test(t.replace(/^[=＝\-—\s　*#]+/,'')) && t.length<=60){ put(L.n,'H'); pending=null; continue; }
+      if(isPageNumberLine(t,false) || /^[-–—~]\s*[0-9０-９]{1,4}\s*[-–—~]$/.test(t)){ put(L.n,'N'); continue; }
+      const sp=splitSpeakerPrefix(t,surf);
+      if(sp){ put(L.n,'S',sp.ids.filter((x,i,ar)=>ar.indexOf(x)===i).join('/')); pending=null; continue; }
+      if(/^[（(].*[）)]$/.test(t)){ put(L.n,'D'); continue; }
+      // 獨立角色名行（整行就是角色稱呼，可含分隔符）
+      const toks=t.replace(/[（(][^）)]*[）)]/g,'').split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
+      if(toks.length && toks.every(x=>surf.has(x)) && t.length<=24){ pending=toks.map(x=>surf.get(x)).filter((x,i,ar)=>ar.indexOf(x)===i).join('/'); put(L.n,'N'); continue; }
+      if(pending){ put(L.n,'S',pending); pending=null; continue; }
+      put(L.n, (prev==='S'||prev==='C')?'C':'D');
+    }
+    return map;
+  }
+
+  // ---------- 組回（規格 5.3）：依行號，C 併入前一個 S，H 開新場景，N 丟棄（保留為 {x}）----------
+  const joinParts=(a,b)=>!a?b:(/[A-Za-z0-9]$/.test(a)&&/^[A-Za-z0-9]/.test(b))?a+' '+b:a+b;
+  function assemble(lines, labels, roles){
+    const surf=buildSurfaceMap(roles), roleIds=roles.map(r=>r.id);
+    const scenes=[], stats={S:0,C:0,D:0,H:0,N:0,orphanC:0,review:0};
+    let cur=null, lastS=null;
+    const newScene=h=>{ cur={meta:h?parseHeading(h):{no:'',name:'',season:'',place:''}, heads:h?[h]:[], items:[]}; scenes.push(cur); lastS=null; };
+    for(const L of lines){
+      const lab=labels.get(L.n)||{label:'N',role:'',rv:true};
+      stats[lab.label]=(stats[lab.label]||0)+1;
+      const rv=!!lab.rv;
+      if(lab.label==='H'){
+        if(cur && !cur.items.some(x=>x.k!=='X') && cur.heads.length){ cur.heads.push(L.text); cur.meta=parseHeading(cur.heads.join(' ')); }   // 連續兩行標題併成一個場次
+        else newScene(L.text);
+        continue;
+      }
+      if(!cur) newScene('');
+      if(lab.label==='S'){
+        let rest=L.text, dir='', pre='';
+        const sp=splitSpeakerPrefix(rest,surf);
+        if(sp){ rest=sp.rest; dir=sp.dir; pre=sp.pre; }
+        lastS={k:'S', s:lab.role, text:rest, dir, pre, rv};
+        cur.items.push(lastS);
+      }else if(lab.label==='C'){
+        if(lastS){ lastS.text=joinParts(lastS.text, L.text); lastS.rv=lastS.rv||rv; }
+        else{ stats.orphanC++; cur.items.push({k:'D', text:L.text, rv:true}); }
+      }else if(lab.label==='D'){
+        cur.items.push({k:'D', text:L.text, rv});
+      }else{
+        cur.items.push({k:'X', text:L.text});
+      }
+    }
+    const outScenes=[];
+    for(const sc of scenes){
+      const ls=[];
+      for(const it of sc.items){
+        if(it.k==='X'){ ls.push({x:it.text}); continue; }
+        if(it.k==='D'){ const o={d:it.text}; if(it.rv) o.rv=true; ls.push(o); continue; }
+        const full=(it.dir?it.dir:'')+it.text;                 // 前綴上的指示放回最前面
+        const sd=stripDirections(full);
+        if(!sd.t){ ls.push(Object.assign({d:(it.pre||'')+full}, it.rv?{rv:true}:{})); continue; }   // 保留說話者前綴，不丟資訊   // 只剩指示 → 當舞台指示
+        const o={s:it.s, t:markJapanese(sd.t)};
+        if(sd.had) o.r=full;
+        if(it.rv) o.rv=true;
+        ls.push(o);
+      }
+      if(!ls.some(l=>l.x===undefined)) continue;                // 只有標題或雜訊的場次不要
+      const m=sc.meta;
+      outScenes.push({no:m.no, name:m.name, season:m.season, place:m.place, lines:ls});
+    }
+    for(const sc of outScenes) for(const l of sc.lines) if(l.rv) stats.review++;
+    return {scenes:outScenes, stats};
+  }
+
+  // ---------- 管線：第一段格式歸納 → 第二段分塊標記 → 組回 ----------
+  // callApi(payload) → Promise<string>（Worker 回的 content）；錯誤若帶 fatal=true（429、503、被擋）則整個中止。
+  async function runPipeline(o){
+    const lines=o.lines, callApi=o.callApi;
+    const prog=p=>{ try{ o.onProgress && o.onProgress(p); }catch(e){} };
+    prog({stage:'format',done:0,total:1});
+    const sample=toWire(sampleForFormat(lines));
+    let fmt=null, lastErr=null;
+    for(let a=0;a<2&&!fmt;a++){
+      try{ fmt=parseFormat(await callApi({mode:'format', lines:sample})); }
+      catch(e){ if(e && e.fatal) throw e; lastErr=e; }
+    }
+    if(!fmt) throw new Error('無法辨識劇本格式：'+(lastErr&&lastErr.message||'未知錯誤'));
+    prog({stage:'format',done:1,total:1,roles:fmt.roles.length});
+
+    const compactRoles=fmt.roles.map(r=>({id:r.id,name:r.name,aliases:r.aliases}));
+    const chunks=chunkLines(lines, o.chunkSize||300, o.overlap==null?10:o.overlap);
+    const labels=new Map(), failed=[], errors=[];
+    let done=0, retried=0;
+    prog({stage:'label',done:0,total:chunks.length,failed:0});
+    async function doChunk(ci){
+      const ch=chunks[ci], sent=lines.slice(ch.from,ch.to), nums=sent.map(l=>l.n), wire=toWire(sent);
+      let parsed=null;
+      for(let a=0;a<2&&!parsed;a++){
+        try{
+          const p=parseLabels(await callApi({mode:'label', lines:wire, roles:compactRoles, rules:fmt.rules}));
+          const errs=validateLabels(p, nums, fmt.roles);
+          if(!errs.length) parsed=p; else{ retried++; errors.push({chunk:ci+1, attempt:a+1, errors:errs.slice(0,5), total:errs.length}); }
+        }catch(e){ if(e && e.fatal) throw e; retried++; errors.push({chunk:ci+1, attempt:a+1, errors:[String(e&&e.message||e)], total:1}); }
+      }
+      const core=lines.slice(ch.start,ch.end);
+      if(parsed) for(const l of core) labels.set(l.n, parsed.map.get(l.n));
+      else{
+        failed.push(ci+1);
+        const h=heuristicLabels(core, fmt.roles, true);          // 整塊失敗：用本機規則先標，並標為待人工校正
+        for(const l of core) labels.set(l.n, h.get(l.n));
+      }
+      done++; prog({stage:'label',done,total:chunks.length,failed:failed.length});
+    }
+    const conc=Math.max(1,o.concurrency||3);
+    let next=0;
+    await Promise.all(Array.from({length:Math.min(conc,chunks.length)},async()=>{
+      while(next<chunks.length){ const ci=next++; await doChunk(ci); }
+    }));
+    const asm=assemble(lines, labels, fmt.roles);
+    const roles=fmt.roles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
+    return {roles, rules:fmt.rules, scenes:asm.scenes, labels,
+      stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), retried, lines:lines.length}, asm.stats), errors};
+  }
+
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 

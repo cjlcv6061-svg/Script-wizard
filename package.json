@@ -5,11 +5,14 @@
   "scripts": {
     "check": "node tests/check-syntax.js",
     "fixtures": "node eval/synth.js eval/out/synth && python3 eval/build_docs.py eval/out/synth eval/out/docs",
-    "test": "node tests/check-syntax.js && node tests/parser.test.js && node tests/storage.test.js && node tests/legacy-compare.test.js && node tests/extract.browser.test.js"
+    "test": "node tests/check-syntax.js && node tests/parser.test.js && node tests/pipeline.test.js && node tests/storage.test.js && node tests/legacy-compare.test.js && node tests/extract.browser.test.js",
+    "eval": "node eval/run.mjs --mode heuristic --docs"
   },
   "devDependencies": {
     "fake-indexeddb": "^6.0.0",
     "jsdom": "^26.0.0",
+    "mammoth": "^1.8.0",
+    "pdfjs-dist": "^3.11.174",
     "playwright-core": "^1.49.0"
   }
 }

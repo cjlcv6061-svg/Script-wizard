@@ -24,3 +24,5 @@ python3 -m http.server 8000   # 本機預覽 http://localhost:8000/
 
 - [x] 步驟 1：Schema 與載入層（IndexedDB、動態角色、移除東京地圖）
 - [x] 步驟 2：本機解析器（docx＝mammoth、PDF＝pdf.js 文字層、貼上；前處理與頁眉頁尾清理）
+- [x] 步驟 3：兩段式標記管線（切塊、回應解析與一致性檢查、組回、內嵌指示、日文標記）與評測腳本（`eval/`）
+  — 真實模型準確率尚未量測（需要你的 OpenRouter key，見 `eval/README.md`）
