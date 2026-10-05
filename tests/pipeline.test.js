@@ -194,6 +194,25 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   const good = new Map([[1, { label: 'S', role: '兄' }]]); const ref = good.get(1);
   T.applyPrefix(mk(['兄：你好']), good, roles2);
   ok(good.get(1) === ref, '標對的行不動');
+  // adoptRoles：模型標了清單外的角色，行首真的寫著才採納
+  {
+    const textOf = new Map([[1, '母：我回來了。'], [2, '路人：你好'], [3, '兄：嗨']]);
+    const rs = rl('兄', '妹'), compact = [];
+    const pp = T.parseLabels('1|S|母\n2|S|甲乙\n3|S|兄');
+    T.adoptRoles(pp, textOf, rs, compact);
+    eq(rs.map(r => r.id), ['兄', '妹', '母'], '行首寫著「母：」→ 採納；模型編的「甲乙」（行首是「路人：」）不採納');
+    eq(compact, [{ id: '母', name: '母', aliases: [] }], '同步更新送給後續塊的角色清單');
+    eq(T.checkLabels(T.parseLabels('1|S|母\n2|S|甲乙\n3|S|兄'), [1, 2, 3, 4], rs).soft.map(x => x.n).sort(), [2, 4], 'checkLabels：角色不明與缺漏是 soft，其餘行不受影響');
+    eq(T.checkLabels(T.parseLabels('1|S|兄\n1|C|\n2|X|'), [1, 2], rs).hard.length, 2, 'checkLabels：重複與標籤不在集合內是 hard');
+  }
+  // tidyRoles：沒有台詞的角色不留；名稱在原文出現過就保留
+  {
+    const lines2 = mk(['兄：你好', '妹：嗨', '葉志偉是他的名字']);
+    const lab = new Map([[1, { label: 'S', role: '兄' }], [2, { label: 'S', role: '妹' }], [3, { label: 'D', role: '' }]]);
+    const t = T.tidyRoles(lines2, lab, [{ id: '兄', name: '葉志偉', aliases: ['志偉', '大哥'] }, { id: '妹', name: '陳立妹', aliases: [] }, { id: '麻', name: '麻', aliases: [] }]);
+    eq(t.roles.map(r => [r.id, r.name, r.aliases]), [['兄', '葉志偉', ['志偉']], ['妹', '妹', []]], '原文出現過的名稱／別名保留，沒出現過的丟掉；沒有台詞的角色不留');
+    eq([t.dropped, t.renamed], [['麻'], ['妹']], '回報移除與改名');
+  }
   // 「（指示）角色名：」常見寫法不算夾帶前綴，也不被強制改標
   const lab2 = new Map([[1, { label: 'D', role: '' }]]);
   eq(T.applyPrefix(mk(['（二人靜默） 兄： 好']), lab2, roles2), { forced: 0, demoted: 0, flagged: 0 }, '指示在前、角色名在後：交給模型，不強制');
@@ -227,13 +246,36 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     const s = scoreLabels(lines, r.labels, v.gold);
     ok(s.acc > 0.95, '後備後行級準確率仍高：' + s.acc.toFixed(4));
   }
-  // 全部壞掉：整份都走後備，仍產出劇本，不中止
+  // 全部壞掉（重複行＝整塊不可信）：整份都走後備，仍產出劇本，不中止
   {
-    const { r, lines, v } = await run('colon-fw', { alwaysFail: false, failRate: 1, seed: 5 });
+    const { r, lines, v } = await run('colon-fw', { failRate: 1, failKind: 2, seed: 5 });
     eq(r.stats.failedChunks, r.stats.chunks, '全部失敗塊');
-    ok(r.stats.review > 1000, '全部標為待校正：' + r.stats.review);
     ok(r.scenes.length === 22 && scoreLabels(lines, r.labels, v.gold).acc > 0.95, '後備仍組出 22 場，行級 >95%');
-    ok(r.scenes.every(sc => sc.lines.every(l => l.x !== undefined || l.rv)), '每一行都帶 rv 旗標');
+    const surf = T.buildSurfaceMap(r.roles);
+    ok(lines.every(l => { const x = r.labels.get(l.n); return x.rv || (x.label === 'S' && T.splitSpeakerPrefix(l.text, surf)); }), '每一行都帶待校正旗標；唯一的例外是行首前綴明確的台詞（規則確定，不必人工看）');
+    ok(r.stats.review > 200 && r.stats.review < lines.length - 900, '其餘不確定的行全標待校正：' + r.stats.review);
+  }
+  // 只有少數行有問題（漏行／角色不在清單）：其餘行照用模型的標記，只有問題行走後備並標待校正，不整塊作廢
+  for (const [kind, what] of [['drop', '漏行'], ['role', '角色不在清單']]) {
+    const v = vs['colon-fw'], lines = T.buildLines({ text: v.text }).lines, mock = makeMock(lines, v.gold, {});
+    const wrap = async p => { const out = await mock.callApi(p); if (p.mode === 'format') return out;
+      return kind === 'role' ? out.replace(/\|S\|[^\n|]+/, '|S|不存在的角色') : out.replace(/\n\d+\|[A-Z]\|[^\n]*\n\d+\|[A-Z]\|[^\n]*\n\d+\|[A-Z]\|[^\n]*(?=\n)/, ''); };   // 每次回應少 3 行
+    const r = await T.runPipeline({ lines, callApi: wrap, concurrency: 1 });
+    eq(r.stats.failedChunks, 0, what + '：沒有整塊失敗');
+    ok(r.stats.partialLines > 0 && r.stats.partialLines <= 5 * 3, what + '：只有少數行走後備：' + r.stats.partialLines);
+    ok(r.stats.review <= r.stats.partialLines + 2 && r.stats.review < 60, what + '：待校正的只會是走後備的行（前綴明確的台詞由規則確認，不必標）：' + r.stats.review + ' ≤ ' + r.stats.partialLines);
+    ok(scoreLabels(lines, r.labels, v.gold).acc > 0.99 && r.scenes.length === 22, what + '：行級準確率仍 >99%、22 場');
+    ok(mock.calls.label === r.stats.chunks, what + '：問題很少就不重試（' + mock.calls.label + ' 次請求）');
+  }
+  // 問題行太多（>25%）→ 整塊失敗；介於兩者之間 → 重試一次取較好的
+  {
+    const v = vs['colon-fw'], lines = T.buildLines({ text: v.text }).lines, mock = makeMock(lines, v.gold, {});
+    let calls = 0;
+    const drop = frac => async p => { const out = await mock.callApi(p); if (p.mode === 'format') return out; calls++; const rows = out.split('\n'); const k = Math.floor(rows.length * frac); return rows.filter((x, i) => i < 1 || i % Math.max(1, Math.round(1 / frac)) !== 0 || !/^\d/.test(x)).join('\n'); };
+    calls = 0; const r1 = await T.runPipeline({ lines, callApi: drop(0.5), concurrency: 1 });
+    eq(r1.stats.failedChunks, r1.stats.chunks, '漏掉一半的行：整塊失敗（超過 25%）');
+    calls = 0; const r2 = await T.runPipeline({ lines, callApi: drop(0.1), concurrency: 1 });
+    ok(r2.stats.failedChunks === 0 && r2.stats.partialLines > 0 && calls > r2.stats.chunks, '漏掉約 10% 的行：重試一次，之後採用較好的那次（請求 ' + calls + ' 次）');
   }
   // 第一段壞掉兩次 → 丟錯；429 → 立即中止（fatal）
   {
@@ -263,6 +305,7 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     gold.push(['兄：買是買了，可是你把雞蛋都', 'S', '兄'], ['吃光了。', 'C', ''], ['妹站起來，走到流理台前面看了一眼。', 'D', ''],
       ['兄：兩顆？盒子是空的。妹：那是你自己吃的。', 'S', '兄'], ['兄／妹：（同時）好餓。', 'S', '兄/妹']);
     for (let i = 0; i < 4; i++) gold.push(['妹：第' + i + '次了', 'S', '妹'], ['兄：我知道', 'S', '兄']);
+    gold.push(['母：我回來了。', 'S', '母'], ['母：飯煮好了。', 'S', '母']);       // 模型第一段沒列出的次要角色（只出現 2 次）
     const lines = T.buildLines({ text: gold.map(g => g[0]).join('\n') }).lines;
     eq(lines.length, gold.length, '合成劇本逐行對應');
     let k = 0;
@@ -285,7 +328,9 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(sl.length === gold.filter(g => g[1] === 'S').length, '台詞數 = 前綴行數：' + sl.length);
     ok(!sl.some(l => /[兄妹]：/.test(l.t) && l.rv !== true), '沒有夾帶別人前綴卻未標待校正的台詞');
     eq(r.stats.review, 3, '待校正只有：2 行被降級的指示 + 1 行夾帶前綴的台詞（實際 ' + r.stats.review + '）');
-    eq(r.roles.map(x => [x.id, x.name]), [['兄', '格'], ['妹', '眉'], ['麻', '拔']], '不去改角色清單與名稱（無法由文字驗證，留給校正頁）');
+    eq(r.stats.failedChunks + r.stats.partialLines, 0, '清單外的次要角色「母」行首真的寫著 → 採納進角色清單，不讓整塊失敗');
+    eq(r.roles.map(x => [x.id, x.name]), [['兄', '兄'], ['妹', '妹'], ['母', '母']], '角色清單：沒有任何台詞的假角色（麻）不留；原文裡找不到的名稱（格、眉）改回 id');
+    eq([r.stats.prefix.dropped, r.stats.prefix.renamed], [['麻'], ['兄', '妹']], '統計：移除與改名的角色');
   }
   // 英文破折號：模型漏掉 Alexandre → 由前綴補上；壞標記同樣被修正
   {

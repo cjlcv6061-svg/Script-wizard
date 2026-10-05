@@ -1551,21 +1551,28 @@ const TSP=(function(){
     return {map,dup,bad};
   }
   // 規格 5.3：每個輸入行恰好標一次；標籤須在集合內；S 的角色須在角色清單內。
-  // 角色欄寫成別名時對回 id（無損的容錯）。回傳錯誤清單（空＝通過）。
-  function validateLabels(parsed, sentNums, roles){
-    const errors=[], sent=new Set(sentNums), surf=buildSurfaceMap(roles);
-    for(const n of parsed.dup) errors.push('重複 L'+n);
-    for(const n of sentNums) if(!parsed.map.has(n)) errors.push('缺漏 L'+n);
+  // 角色欄寫成別名時對回 id（無損的容錯）。
+  // checkLabels 把問題分兩類：hard（重複、多出、標籤不在集合內：整塊回應不可信）與
+  // soft（缺漏、角色不在清單內：只有那幾行不可信，其餘行仍可採用）。
+  function checkLabels(parsed, sentNums, roles){
+    const hard=[], soft=[], sent=new Set(sentNums), surf=buildSurfaceMap(roles);
+    for(const n of parsed.dup) hard.push('重複 L'+n);
+    for(const n of sentNums) if(!parsed.map.has(n)) soft.push({n, msg:'缺漏 L'+n});
     for(const [n,v] of parsed.map){
-      if(!sent.has(n)){ errors.push('多出 L'+n); continue; }
-      if('SCDHN'.indexOf(v.label)<0 || v.label.length!==1){ errors.push('標籤不在集合內 L'+n+'：'+v.label); continue; }
+      if(!sent.has(n)){ hard.push('多出 L'+n); continue; }
+      if('SCDHN'.indexOf(v.label)<0 || v.label.length!==1){ hard.push('標籤不在集合內 L'+n+'：'+v.label); continue; }
       if(v.label==='S'){
         const ids=v.role.split(/\s*[\/／]\s*/).map(x=>x.trim()).filter(Boolean).map(x=>surfGet(surf,x));
-        if(!ids.length || ids.some(x=>!x)) errors.push('角色不在清單內 L'+n+'：'+v.role);
+        if(!ids.length || ids.some(x=>!x)) soft.push({n, msg:'角色不在清單內 L'+n+'：'+v.role});
         else v.role=ids.filter((x,i)=>ids.indexOf(x)===i).join('/');
       }else v.role='';
     }
-    return errors;
+    return {hard, soft};
+  }
+  // 回傳錯誤清單（空＝通過）
+  function validateLabels(parsed, sentNums, roles){
+    const c=checkLabels(parsed, sentNums, roles);
+    return c.hard.concat(c.soft.map(x=>x.msg));
   }
 
   // ---------- 本機規則：內嵌指示、日文標記、說話者前綴、場次標題 ----------
@@ -1752,6 +1759,7 @@ const TSP=(function(){
       if(sp){
         const role=sp.ids.filter((x,i,a)=>a.indexOf(x)===i).join('/');
         if(!cur || cur.label!=='S' || cur.role!==role){ labels.set(l.n,{label:'S',role}); st.forced++; }
+        else if(cur.rv) labels.set(l.n,{label:'S',role});      // 後備規則標的、行首前綴明確的台詞：這一行是確定的，不必人工看
         probe=sp.rest;
       }else if(cur && cur.label==='S' && !PFX_RE.test(l.text)){
         const h=H.get(l.n);
@@ -1762,6 +1770,37 @@ const TSP=(function(){
       if(fin && !fin.rv && fin.label!=='N' && fin.label!=='H' && hasInlinePrefix(probe,surf)){ labels.set(l.n,Object.assign({},fin,{rv:true})); st.flagged++; }
     }
     return st;
+  }
+
+  const prefixTokens=text=>{ const m=text.match(PFX_RE); return m?m[1].split(SPK_SEP).map(x=>x.trim()).filter(Boolean):[]; };
+  // 模型標了清單外的角色，但那一行的行首真的寫著這個稱呼 → 是文字裡的次要角色（第一段樣本沒涵蓋到），
+  // 補進清單；否則整塊會因為一個沒見過的角色被判失敗。行首沒寫的（模型自己編的）不採納。
+  function adoptRoles(p, textOf, roles, compactRoles){
+    const surf=buildSurfaceMap(roles);
+    for(const [n,v] of p.map){
+      if(v.label!=='S' || !v.role || !textOf.has(n)) continue;
+      const toks=prefixTokens(textOf.get(n));
+      for(const part of v.role.split(/\s*[\/／]\s*/).map(x=>x.trim()).filter(Boolean)){
+        if(surfGet(surf,part) || roles.length>=40) continue;
+        const id=cleanId(part);
+        if(!id || id!==part || !toks.includes(part)) continue;
+        roles.push({id, name:id, aliases:[], gender:'n'}); compactRoles.push({id, name:id, aliases:[]}); surf.set(id,id);
+      }
+    }
+  }
+  // 前綴格式劇本的角色清單整理（在 applyPrefix 之後）：沒有任何台詞的角色（模型編的）不留；
+  // 名稱／別名若在整份原文裡一次都沒出現過（或只有單一個字，必然出現過、不算依據），就是沒有依據的（例如範例裡的虛構姓氏），名稱改回 id、別名丟掉。
+  function tidyRoles(lines, labels, roles){
+    const used=new Set(), hay=lines.map(l=>l.text).join('\n').toLowerCase(), dropped=[], renamed=[];
+    for(const l of lines){ const v=labels.get(l.n); if(v && v.label==='S') for(const x of v.role.split('/')) used.add(x); }
+    const out=[];
+    for(const r of roles){
+      if(!used.has(r.id)){ dropped.push(r.id); continue; }
+      const keep=r.name===r.id || (r.name.length>=2 && hay.includes(r.name.toLowerCase()));     // 單字的名稱在原文裡必然出現過，不算證據
+      if(!keep) renamed.push(r.id);
+      out.push(Object.assign({}, r, {name:keep?r.name:r.id, aliases:(r.aliases||[]).filter(a=>hay.includes(String(a).toLowerCase()))}));
+    }
+    return {roles:out.length?out:roles, dropped, renamed};
   }
 
   // ---------- 組回（規格 5.3）：依行號，C 併入前一個 S，H 開新場景，N 丟棄（保留為 {x}）----------
@@ -1852,19 +1891,34 @@ const TSP=(function(){
     const labels=new Map(), failed=[], errors=[];
     let done=0, retried=0;
     prog({stage:'label',done:0,total:chunks.length,failed:0});
+    const textOf=new Map(lines.map(l=>[l.n,l.text]));
+    const partial=[]; let partialLines=0;
     async function doChunk(ci){
       const ch=chunks[ci], sent=lines.slice(ch.from,ch.to), nums=sent.map(l=>l.n), wire=toWire(sent);
-      let parsed=null;
-      for(let a=0;a<2&&!parsed;a++){
+      const coreN=new Set(lines.slice(ch.start,ch.end).map(l=>l.n));
+      const SMALL=Math.max(2,Math.floor(coreN.size*0.05)), LIMIT=Math.max(3,Math.floor(coreN.size*0.25));
+      let best=null;                       // 取問題最少的一次回應；只有少數行有問題（缺漏／角色不明）時仍採用
+      for(let a=0;a<2;a++){
         try{
           const p=parseLabels(await callApi({mode:'label', lines:wire, roles:compactRoles, rules:fmt.rules}));
-          const errs=validateLabels(p, nums, fmt.roles);
-          if(!errs.length) parsed=p; else{ retried++; errors.push({chunk:ci+1, attempt:a+1, errors:errs.slice(0,5), total:errs.length}); }
+          if(pm.on) adoptRoles(p, textOf, fmt.roles, compactRoles);
+          const c=checkLabels(p, nums, fmt.roles), soft=c.soft.filter(x=>coreN.has(x.n)).map(x=>x.n);
+          if(c.hard.length || soft.length>LIMIT){
+            retried++; const msgs=c.hard.concat(c.soft.map(x=>x.msg));
+            errors.push({chunk:ci+1, attempt:a+1, errors:msgs.slice(0,5), total:msgs.length});
+          }else{
+            if(!best || soft.length<best.soft.length) best={p, soft};
+            if(soft.length<=SMALL) break;
+            retried++; errors.push({chunk:ci+1, attempt:a+1, errors:['有 '+soft.length+' 行缺漏或角色不明，重試一次'], total:soft.length});
+          }
         }catch(e){ if(e && e.fatal) throw e; retried++; errors.push({chunk:ci+1, attempt:a+1, errors:[String(e&&e.message||e)], total:1}); }
       }
       const core=lines.slice(ch.start,ch.end);
-      if(parsed) for(const l of core) labels.set(l.n, parsed.map.get(l.n));
-      else{
+      if(best){
+        const bad=new Set(best.soft), h=bad.size?heuristicLabels(core, fmt.roles, true):null;     // 只有問題行用本機規則標並標為待校正
+        for(const l of core) labels.set(l.n, bad.has(l.n)?h.get(l.n):best.p.map.get(l.n));
+        if(bad.size){ partial.push(ci+1); partialLines+=bad.size; }
+      }else{
         failed.push(ci+1);
         const h=heuristicLabels(core, fmt.roles, true);          // 整塊失敗：用本機規則先標，並標為待人工校正
         for(const l of core) labels.set(l.n, h.get(l.n));
@@ -1879,15 +1933,19 @@ const TSP=(function(){
         try{ await doChunk(ci); }catch(e){ aborted=true; throw e; }     // fatal：不再派發新塊，免得白白耗掉每日額度
       }
     }));
-    const pfx=pm.on?applyPrefix(lines, labels, fmt.roles):null;
-    const asm=assemble(lines, labels, fmt.roles);
-    const roles=fmt.roles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
+    let pfx=null, finalRoles=fmt.roles;
+    if(pm.on){
+      pfx=applyPrefix(lines, labels, fmt.roles);
+      const t=tidyRoles(lines, labels, fmt.roles); finalRoles=t.roles; pfx.dropped=t.dropped; pfx.renamed=t.renamed;
+    }
+    const asm=assemble(lines, labels, finalRoles);
+    const roles=finalRoles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
     return {roles, rules:fmt.rules, scenes:asm.scenes, labels,
-      stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), retried, lines:lines.length}, asm.stats,
+      stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), partialChunkNos:partial.sort((a,b)=>a-b), partialLines, retried, lines:lines.length}, asm.stats,
         {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added}, pfx):null}), errors};
   }
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,checkLabels,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 
