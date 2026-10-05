@@ -105,9 +105,19 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   for (let i = 0; i < 12; i++) src.push('兄：甲' + i, '妹：乙' + i);
   src.push('護士：請借過', '護士：讓一讓', '護士：小心', 'SD Cue：煙花聲效', 'SD Cue：轉場音樂', '楊：你好', '楊：再見', '路人：喂');       // 路人只出現 1 次
   const d = T.detectPrefix(mk(src), rl('兄', '妹'));
-  eq(d.candidates.map(c => [c[0], c[1]]), [['護士', 3], ['SD Cue', 2], ['楊', 2]], '候選稱呼：行首出現 ≥2 次、模型沒列出的稱呼，依次數排序（出現 1 次的、已知角色不列）');
-  eq(d.candidates.map(c => c[2]), ['護士：請借過', 'SD Cue：煙花聲效', '楊：你好'], '每個候選附第一次出現的那一行當例句');
-  eq(T.detectPrefix(mk(src), rl('兄', '妹', '護士')).candidates.map(c => c[0]), ['SD Cue', '楊'], '已知角色不再是候選');
+  eq(d.candidates.map(c => [c[0], c[1]]), [['護士', 3], ['SD Cue', 2], ['楊', 2], ['路人', 1]], '候選稱呼：行首出現過、模型沒列出的稱呼，依次數排序（只出現 1 次的也列，已知角色不列）');
+  eq(d.candidates.map(c => c[2]), ['護士：請借過', 'SD Cue：煙花聲效', '楊：你好', '路人：喂'], '每個候選附第一次出現的那一行當例句');
+  // 句子裡的逗號不是合說分隔符：台詞續行「無人需要我留低，好自由，跟住我同自己講：「…」」不會被拆成三個候選稱呼；「、」「／」合說仍然認得
+  const comma = src.concat(['無人需要我留低，好自由，跟住我同自己講：「實仲有」', 'Well, hmm: okay then', '兄、妹：一齊講']);
+  const dc = T.detectPrefix(mk(comma), rl('兄', '妹'));
+  eq(dc.candidates.map(c => c[0]).filter(x => /好自由|跟住|無人|hmm|Well/.test(x)), [], '逗號不拆候選稱呼');
+  eq(T.detectPrefix(mk(src.concat(['兄、妹：一齊講'])), rl('兄', '妹')).prefixLines, 24 + 1, '「兄、妹：」合說仍然算前綴行');
+  // 中英混合的稱呼（亞Toy、呂VO、魔老VO）也認得
+  const mixed = []; for (let i = 0; i < 14; i++) mixed.push('呂同學：句' + i, '魔老：回' + i);
+  mixed.push('亞Toy  ：呀妳要玩具', '亞Toy  ：笑妹妹', '呂VO    ：係呢頭先', '魔老VO：係傳說嚟架', 'VO\t：特別新聞');
+  eq(T.detectPrefix(mk(mixed), rl('呂同學', '魔老')).candidates.map(c => [c[0], c[1]]), [['亞Toy', 2], ['呂VO', 1], ['魔老VO', 1], ['VO', 1]], '中英混合的稱呼：亞Toy、呂VO、魔老VO 都進候選');
+  eq(T.splitSpeakerPrefix('呂VO    ：係呢', T.buildSurfaceMap([{ id: '呂VO', name: '呂VO', aliases: [] }])).ids, ['呂VO'], '中英混合的稱呼也能剝前綴');
+  eq(T.detectPrefix(mk(src), rl('兄', '妹', '護士')).candidates.map(c => c[0]), ['SD Cue', '楊', '路人'], '已知角色不再是候選');
 
   // parseRoleVerdicts
   const cands = [['護士', 3, ''], ['SD Cue', 2, ''], ['楊', 2, ''], ['路人', 2, '']];
@@ -128,6 +138,10 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   const r3 = T.applyRoleVerdicts([{ id: '兄', name: '兄', aliases: [] }, { id: '楊', name: '楊', aliases: [] }, { id: '楊淑華', name: '楊淑華', aliases: [] }], new Map([['楊', { k: 'A', to: '楊淑華' }]]), ['楊']);
   eq(r3.roles.map(r => r.id), ['兄', '楊淑華'], 'A：撤銷自動補進的同名角色，改成別名（不會變成兩個角色）');
   eq(T.applyRoleVerdicts(base, new Map(), []).roles, base, '沒有判斷：維持原狀');
+  // 角色上限 55：超過的 R 不再補進（Worker 單次標記請求最多 60 個角色）
+  const many = Array.from({ length: 54 }, (_, i) => ({ id: '角' + i, name: '角' + i, aliases: [] }));
+  const rr = T.applyRoleVerdicts(many, new Map([['甲', { k: 'R' }], ['乙', { k: 'R' }], ['丙', { k: 'R' }]]), []);
+  eq([rr.roles.length, rr.stats.role], [55, 1], '角色上限 55：只補進第一個，其餘略過');
 }
 
 // ---- 切塊 / 取樣 ----

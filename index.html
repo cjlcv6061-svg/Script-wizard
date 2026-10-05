@@ -1711,11 +1711,15 @@ const TSP=(function(){
   // 模型卻可能把這種行標成續行或雜訊、把舞台指示標成台詞。
   // 所以：先數行首前綴（補上模型漏掉的角色），標記完成後再用前綴覆寫模型標錯的行。
   // 角色的顯示名稱無法由文字驗證，不去改它（校正頁可改）。
-  const PFX_CJK='[^\\sA-Za-z0-9：:–—（(，。、！？!?"“”「」『』….\\/／&＆]{1,8}';
+  const PFX_CJK_CH='[^\\sA-Za-z0-9：:–—（(，。、！？!?"“”「」『』….\\/／&＆]';
+  const PFX_CJK=PFX_CJK_CH+'{1,8}';
   const PFX_LAT="[A-Za-z][A-Za-z.'’-]*(?: [A-Za-z][A-Za-z.'’-]*){0,2}";
-  const PFX_TOK='(?:'+PFX_CJK+'|'+PFX_LAT+')';
-  // 行首「角色名（指示）：」「角色名 – 」；合說「偉、朗：」「玲／朗／K：」「A and B – 」整串算一個前綴
-  const PFX_RE=new RegExp('^('+PFX_TOK+'(?:\\s*(?:[、,，\\/／&＆]|\\s+and\\s+)\\s*'+PFX_TOK+')*)(?:\\s*[（(][^）)]{0,20}[）)])?(?:\\s*([：:])\\s*\\S|\\s([–—-])\\s+\\S)');
+  // 中英混合的稱呼（「亞Toy」「呂VO」「魔老VO」）：中文與英文字母相連
+  const PFX_MIX='(?:'+PFX_CJK_CH+'{1,6}[A-Za-z]{1,8}|[A-Za-z]{1,8}'+PFX_CJK_CH+'{1,6})';
+  const PFX_TOK='(?:'+PFX_MIX+'|'+PFX_CJK+'|'+PFX_LAT+')';
+  // 行首「角色名（指示）：」「角色名 – 」；合說「偉、朗：」「玲／朗／K：」「A and B – 」整串算一個前綴。
+  // 逗號不算合說的分隔符：句子裡的逗號太常見（「無人需要我留低，好自由，跟住我同自己講：」是一句台詞的續行）
+  const PFX_RE=new RegExp('^('+PFX_TOK+'(?:\\s*(?:[、\\/／&＆]|\\s+and\\s+)\\s*'+PFX_TOK+')*)(?:\\s*[（(][^）)]{0,20}[）)])?(?:\\s*([：:])\\s*\\S|\\s([–—-])\\s+\\S)');
   // 行首前綴的分析：{toks:[稱呼…], kind:'colon'|'dash'}。人物表常見「王家輝 – 王良的大姪兒，男，10歲」（破折號＝簡介），
   // 台詞卻用冒號；所以前綴風格（colon／dash）要看整份劇本哪一種占絕大多數，另一種不算前綴（sep 為 'mixed' 時兩種都算）。
   function pfxMatch(text, sep){
@@ -1773,9 +1777,9 @@ const TSP=(function(){
       if(owners.length===1){ owners[0].aliases.push(t); surf2.set(t,owners[0].id); continue; }
       out.push({id, name:id, aliases:[], gender:'n'}); added.push(id);
     }
-    // 候選稱呼表（交給模型判斷哪些是角色）：模型第一段沒列出、但行首出現 ≥2 次的稱呼，各附一行例句
+    // 候選稱呼表（交給模型判斷哪些是角色）：模型第一段沒列出、但行首出現過的稱呼（依次數排序，最多 150 個），各附一行例句
     const ex=new Map(); for(const l of lines){ const m=pfxMatch(l.text,sep); if(m) for(const t of m.toks) if(!ex.has(t)) ex.set(t,l.text); }
-    const candidates=[...cnt].filter(([t,c])=>c>=2 && !surfGet(surf,t) && t.length<=24 && !/[|｜]/.test(t)).sort((x,y)=>y[1]-x[1]).slice(0,100).map(([t,c])=>[t,c,(ex.get(t)||'').slice(0,80)]);
+    const candidates=[...cnt].filter(([t])=>!surfGet(surf,t) && t.length<=24 && !/[|｜]/.test(t)).sort((x,y)=>y[1]-x[1]).slice(0,150).map(([t,c])=>[t,c,(ex.get(t)||'').slice(0,80)]);
     return {on:true, roles:out, prefixLines, added, sep, candidates};
   }
   // 標記完成後套用：有已知前綴的行一律是台詞；沒有前綴卻被標成台詞的行改用規則標並標為待校正；
@@ -1834,12 +1838,13 @@ const TSP=(function(){
         const j=idx(v.to); if(!out[j].aliases.includes(t)) out[j].aliases.push(t); st.alias++;
       }else if(v.k==='R'){
         if(i>=0 || out.some(r=>r.name===t || (r.aliases||[]).includes(t))) continue;
-        const id=cleanId(t); if(!id || id!==t || out.length>=40) continue;
+        const id=cleanId(t); if(!id || id!==t || out.length>=MAX_ROLES) continue;
         out.push({id, name:id, aliases:[], gender:'n'}); st.role++;
       }
     }
     return {roles:out, stats:st};
   }
+  const MAX_ROLES=55;       // 角色清單上限（Worker 單次標記請求最多 60 個角色，留一點餘裕）
   const prefixTokens=(text,sep)=>{ const m=pfxMatch(text,sep); return m?m.toks:[]; };
   // 模型標了清單外的角色，但那一行的行首真的寫著這個稱呼 → 是文字裡的次要角色（第一段樣本沒涵蓋到），
   // 補進清單；否則整塊會因為一個沒見過的角色被判失敗。行首沒寫的（模型自己編的）不採納。
@@ -1849,7 +1854,7 @@ const TSP=(function(){
       if(v.label!=='S' || !v.role || !textOf.has(n)) continue;
       const toks=prefixTokens(textOf.get(n),sep);
       for(const part of v.role.split(/\s*[\/／]\s*/).map(x=>stripRoleNote(x)).filter(Boolean)){
-        if(surfGet(surf,part) || roles.length>=40) continue;
+        if(surfGet(surf,part) || roles.length>=MAX_ROLES) continue;
         const id=cleanId(part);
         if(!id || id!==part || !toks.includes(part)) continue;
         roles.push({id, name:id, aliases:[], gender:'n'}); compactRoles.push({id, name:id, aliases:[]}); surf.set(id,id);

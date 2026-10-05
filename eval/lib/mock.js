@@ -22,9 +22,9 @@ function makeMock(lines, gold, opts = {}) {
       if (opts.alwaysFail) return '{not json';
       return JSON.stringify({ roles: ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(a => a !== r.id), gender: GENDER[r.id] || 'n' })), rules: { speaker_pos: 'mock' } });
     }
-    if (payload.mode === 'roles') {                       // 候選稱呼分類：預設把每個候選都當角色（R）；opts.roles(candidates) 可自訂
+    if (payload.mode === 'roles') {                       // 候選稱呼分類：預設不回任何判斷；opts.roles(candidates, roles) 可自訂
       calls.roles++;
-      return opts.roles ? opts.roles(payload.candidates, payload.roles) : payload.candidates.map(c => c[0] + '|R|').join('\n');
+      return opts.roles ? opts.roles(payload.candidates, payload.roles) : '';      // 預設不回任何判斷（相當於模型幫不上忙）
     }
     calls.label++;
     const rows = payload.lines.map(([n]) => {
