@@ -1,5 +1,5 @@
 # 台詞小精靈 解析 Worker（SPEC 第 6 節）
-# 站長設定：把下面三個 CHANGE_ME / REPLACE_ME 換成實際值，再 `npx wrangler deploy`。
+# 站長設定：確認 ALLOWED_ORIGIN，並把 MODEL 的 REPLACE_ME 換成實際值，再 `npx wrangler deploy`。
 # API key 不放這裡：在終端機執行 `npx wrangler secret put OPENROUTER_API_KEY` 貼上（不經過聊天、不寫進任何檔案）。
 name = "tsj-parse"
 main = "src/index.mjs"
@@ -8,7 +8,7 @@ workers_dev = true
 
 [vars]
 # CORS 只允許這個來源（只填來源，不含路徑）。換自訂網域時只改這裡與前端的 TSJ_CONFIG.WORKER_URL。
-ALLOWED_ORIGIN = "https://CHANGE_ME.github.io"
+ALLOWED_ORIGIN = "https://cjlcv6061-svg.github.io"
 # OpenRouter 模型 ID。上線前到 openrouter.ai 的模型頁確認現行 ID（SPEC：DeepSeek V4.1 Flash）。
 MODEL = "REPLACE_ME_CONFIRM_ON_OPENROUTER"
 # 供應商允許清單（逗號分隔）。到模型頁的 Providers 分頁確認它們標示為不訓練、不保留提示詞；更換時須重新確認。

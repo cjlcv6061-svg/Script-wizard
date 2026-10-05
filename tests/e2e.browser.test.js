@@ -74,7 +74,7 @@ const listen = (srv, port) => new Promise(r => srv.listen(port || 0, '127.0.0.1'
   while (!/Ready on/.test(wlog)) { if (Date.now() - t0 > 90000) { kill(); throw new Error('wrangler dev 沒有啟動：\n' + wlog.slice(-1500)); } await new Promise(r => setTimeout(r, 300)); }
 
   const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] });
-  const ctx = await browser.newContext();
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 });   // 手機尺寸
   await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
   const page = await ctx.newPage();
   const errors = [];
@@ -112,10 +112,19 @@ const listen = (srv, port) => new Promise(r => srv.listen(port || 0, '127.0.0.1'
   // ---- 2. 完整流程（同意已記住，不再詢問）----
   await page.goto(URL_);
   await page.waitForFunction(() => document.body.classList.contains('home-mode'));
-  await paste(V['colon-fw'].text, '端到端測試');
+  const docx = path.join(ROOT, 'eval/out/docs/docx-colon.docx');
+  if (fs.existsSync(docx)) {
+    await page.click('#homeAddBtn');
+    await page.setInputFiles('#addFile', docx);                       // 真的上傳 docx
+    await page.waitForFunction(() => !document.getElementById('addNext').disabled);
+    await page.fill('#addTitle', '端到端測試');
+  } else await paste(V['colon-fw'].text, '端到端測試');
   await page.click('#addNext');
-  await page.waitForFunction(() => !document.body.classList.contains('nonapp'), null, { timeout: 90000 });
-  ok(await page.evaluate(() => document.getElementById('roleOverlay').style.display === 'flex'), '解析完成後進入選角畫面');
+  await page.waitForFunction(() => document.body.classList.contains('review-mode'), null, { timeout: 90000 });
+  ok(await page.evaluate(() => document.querySelectorAll('#rvBody .rv-scene').length === 22 && document.querySelectorAll('#rvBody .rv-row').length > 1000), '解析完成後先進校正頁（22 個場次、逐行列出）');
+  await page.click('#rvDone');
+  await page.waitForFunction(() => !document.body.classList.contains('nonapp'));
+  ok(await page.evaluate(() => document.getElementById('roleOverlay').style.display === 'flex'), '按「完成」後進入選角畫面');
   const calls1 = upstream.calls.length;
   ok(calls1 === 6, '第一段 1 次 + 第二段 5 塊 = 6 次上游請求（實際 ' + calls1 + '）');
   const sizes = upstream.calls.map(c => c.messages[1].content.split('\n').filter(l => /^\d+\t/.test(l)).length);
@@ -138,17 +147,17 @@ const listen = (srv, port) => new Promise(r => srv.listen(port || 0, '127.0.0.1'
   await page.waitForFunction(() => document.body.classList.contains('home-mode'));
   await paste(V['colon-fw'].text, '同內容再解析一次');
   await page.click('#addNext');
-  await page.waitForFunction(() => !document.body.classList.contains('nonapp'), null, { timeout: 30000 });
+  await page.waitForFunction(() => document.body.classList.contains('review-mode'), null, { timeout: 30000 });
   ok(upstream.calls.length === calls1, '相同內容不重複呼叫（仍是 ' + upstream.calls.length + ' 次）');
   ok((await page.evaluate(() => Store.all('scripts'))).length === 2, '快取命中仍建立新劇本');
 
   // ---- 4. 超過每日上限 → 429 提示（DAILY_PER_IP=12，已用 1(失敗)+6=7；不同內容需 1+7 次，第 13 次起 429）----
-  await page.click('#landHome');   // 此時停在選角畫面，用它的「‹ 我的劇本」回首頁
+  await page.click('#rvBack');   // 此時停在校正頁，用「‹ 我的劇本」回首頁
   await page.waitForFunction(() => document.body.classList.contains('home-mode'));
   await paste(V['wrapped'].text, '會超額');
   await page.click('#addNext');
   await page.waitForFunction(() => document.getElementById('parseErr').style.display === 'block', null, { timeout: 60000 }).catch(async e => {
-    throw new Error('429 測試逾時：stage=' + await stage() + ' detail=' + await page.textContent('#parseDetail') + ' body=' + await page.evaluate(() => document.body.className) + ' 上游請求數=' + upstream.calls.length + '\n' + errors.join('\n'));
+    throw new Error('429 測試逾時：stage=' + await stage() + ' detail=' + await page.textContent('#parseDetail') + ' body=' + await page.evaluate(() => document.body.className) + ' 上游請求數=' + upstream.calls.length + '\n' + errors.join('\n') + '\n--- wrangler 日誌尾端 ---\n' + wlog.slice(-2500));
   });
   ok(/解析次數已用完/.test(await page.textContent('#parseErr')), '超過上限 → 顯示明確的 429 訊息：' + await page.textContent('#parseErr'));
   ok((await page.evaluate(() => Store.all('scripts'))).length === 2, '中止後不留下半成品劇本');

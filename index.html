@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>台詞小精靈</title>
+<meta name="theme-color" content="#1c150f">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="台詞小精靈">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=Noto+Serif+TC:wght@400;500;700;900&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Sans+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -753,6 +760,50 @@
   .prog-fill{height:100%;width:0;background:var(--vermilion);transition:width .3s ease;}
   .ghost-btn.primary-solid{background:var(--vermilion);border-color:var(--vermilion);color:#fff;}
   .ghost-btn.primary-solid:hover{background:var(--vermilion-deep);border-color:var(--vermilion-deep);}
+  /* ---------- 預覽校正 ---------- */
+  #reviewView{display:none;}
+  body.review-mode #reviewView{display:block;}
+  .rv-bar{position:sticky;top:0;z-index:20;background:var(--header-bg);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:10px 16px 8px;}
+  .rv-bar-top{display:flex;align-items:baseline;gap:12px;max-width:880px;margin:0 auto;}
+  .rv-bar-top .back-link{padding:0;white-space:nowrap;}
+  .rv-title{font-family:"Noto Serif TC",serif;font-weight:700;font-size:1.05rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .rv-tools{display:flex;gap:8px;flex-wrap:wrap;max-width:880px;margin:8px auto 0;}
+  .rv-tools .ghost-btn{font-size:.72rem;padding:6px 10px;}
+  .rv-help{max-width:880px;margin:10px auto;padding:0 16px;color:var(--muted);font-size:.8rem;line-height:1.6;}
+  #rvBody{max-width:880px;margin:0 auto;padding:0 12px 120px;}
+  .rv-scene{margin-top:22px;}
+  .rv-scene-head{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:8px;border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:6px;background:rgba(176,132,54,.08);}
+  .rv-scene-head input{background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:4px;color:var(--ink);font:inherit;font-size:.82rem;padding:4px 6px;min-width:0;}
+  .rv-scene-head .f-no{width:5.5em;font-weight:700;} .rv-scene-head .f-name{width:7em;} .rv-scene-head .f-season{width:4.5em;} .rv-scene-head .f-place{flex:1;min-width:6em;}
+  .rv-scene-head .ghost-btn{font-size:.68rem;padding:4px 8px;}
+  .rv-row{border:1px solid transparent;border-radius:6px;padding:6px 8px;margin-top:3px;cursor:pointer;}
+  .rv-row:hover{background:rgba(255,255,255,.04);}
+  .rv-row.rv{border-color:#e0a030;background:rgba(224,160,48,.10);}
+  .rv-row.open{background:rgba(255,255,255,.06);border-color:var(--line);cursor:default;}
+  .rv-main{display:flex;gap:8px;align-items:flex-start;}
+  .rv-chip{flex:none;font-size:.66rem;font-weight:700;padding:2px 6px;border-radius:3px;margin-top:2px;letter-spacing:.05em;}
+  .k-S .rv-chip{background:var(--vermilion);color:#fff;} .k-D .rv-chip{background:var(--gold);color:#1c150f;} .k-X .rv-chip{background:rgba(255,255,255,.18);color:var(--muted);}
+  .rv-seals{flex:none;display:flex;gap:2px;margin-top:1px;}
+  .rv-seal{font-size:.72rem;font-weight:700;min-width:1.7em;height:1.7em;line-height:1.7em;text-align:center;border-radius:4px;color:#1c150f;padding:0 3px;}
+  .rv-text{flex:1;min-width:0;line-height:1.6;word-break:break-word;font-size:.94rem;}
+  .k-D .rv-text{color:var(--gold);font-style:italic;} .k-X .rv-text{color:var(--muted);text-decoration:line-through;}
+  .rv-edit{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);}
+  .rv-seg{display:flex;gap:6px;margin-bottom:8px;}
+  .rv-seg button, .rv-rolechip{font:inherit;font-size:.78rem;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:14px;padding:3px 11px;cursor:pointer;}
+  .rv-seg button[aria-pressed="true"], .rv-rolechip[aria-pressed="true"]{background:var(--vermilion);border-color:var(--vermilion);color:#fff;}
+  .rv-rolechips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;}
+  .rv-edit textarea{width:100%;min-height:4.5em;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;line-height:1.6;padding:8px;resize:vertical;}
+  .rv-btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+  .rv-btns .ghost-btn{font-size:.7rem;padding:5px 9px;}
+  #rolesList .r-row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);}
+  #rolesList input,#rolesList select{background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:4px;color:var(--ink);font:inherit;font-size:.84rem;padding:4px 6px;min-width:0;}
+  #rolesList .r-id{width:5em;font-weight:700;} #rolesList .r-name{flex:1;min-width:6em;}
+  #rolesList .r-use{color:var(--muted);font-size:.74rem;width:4.5em;}
+  #rolesList .ghost-btn{font-size:.68rem;padding:4px 8px;}
+  #rolesList .ghost-btn:disabled{opacity:.35;cursor:not-allowed;}
+  .rv-addrole{display:flex;gap:8px;margin-top:14px;}
+  @keyframes rvflash{0%{box-shadow:0 0 0 3px rgba(224,160,48,.9);}100%{box-shadow:0 0 0 3px rgba(224,160,48,0);}}
+  .rv-row.flash{animation:rvflash 1.1s ease;}
 </style>
 </head>
 <body>
@@ -762,6 +813,10 @@
     <h1 class="home-title">台詞<span class="em">小精靈</span></h1>
     <p class="home-sub">上傳劇本，自動整理成可背誦的台詞本。劇本只存在這部裝置的瀏覽器裡。</p>
     <div class="home-memwarn" id="homeMemWarn">此瀏覽器無法持久儲存資料（可能是無痕模式）。關閉頁面後劇本會消失，請務必用「匯出」備份。</div>
+    <div class="home-memwarn" id="homeInstall" style="border-color:var(--gold);color:var(--gold);">
+      iPhone／iPad：在 Safari 按「分享」→「加入主畫面」，就能像 App 一樣使用。提醒：iOS 對超過 7 天沒開啟的網站可能清除資料，重要劇本請用每份劇本的「匯出」備份。
+      <button class="ghost-btn" id="homeInstallClose" style="margin-left:8px;font-size:.68rem;padding:3px 8px;">知道了</button>
+    </div>
     <div class="home-actions">
       <button class="ghost-btn primary" id="homeAddBtn">新增劇本</button>
       <button class="ghost-btn" id="homeImportBtn">匯入 JSON</button>
@@ -821,6 +876,35 @@
     <div class="modal-actions">
       <button class="ghost-btn primary-solid" id="consentOk">同意並繼續</button>
       <button class="ghost-btn" id="consentNo">取消</button>
+    </div>
+  </div>
+</div>
+<!-- 預覽校正 -->
+<div id="reviewView">
+  <div class="rv-bar">
+    <div class="rv-bar-top">
+      <button class="back-link" id="rvBack">‹ 我的劇本</button>
+      <div class="rv-title" id="rvTitle"></div>
+    </div>
+    <div class="rv-tools">
+      <button class="ghost-btn" id="rvRoles">角色</button>
+      <button class="ghost-btn" id="rvNext">待校正 <b id="rvPend">0</b> ▸</button>
+      <button class="ghost-btn" id="rvNoise" aria-pressed="false">顯示雜訊行</button>
+      <button class="ghost-btn primary-solid" id="rvDone">完成，開始背誦</button>
+    </div>
+  </div>
+  <div class="rv-help" id="rvHelp">點一行可修改。橘色邊框是自動標記不確定的行。每次修改都會自動存檔。</div>
+  <div id="rvBody"></div>
+</div>
+<div class="modal-backdrop" id="rolesModal" style="display:none;z-index:250;">
+  <div class="modal">
+    <button class="modal-close" id="rolesClose" aria-label="關閉">×</button>
+    <h2 class="modal-title">角色</h2>
+    <div class="rv-help">改代號會同步改寫所有台詞；合併會把一個角色的台詞全部歸給另一個；只有沒有台詞的角色可以刪除。性別用來分配朗讀的聲音。</div>
+    <div id="rolesList"></div>
+    <div class="rv-addrole">
+      <input class="add-field" id="newRoleId" type="text" maxlength="12" placeholder="新角色代號">
+      <button class="ghost-btn" id="newRoleBtn">新增角色</button>
     </div>
   </div>
 </div>
@@ -1623,7 +1707,8 @@ const TSP=(function(){
   // callApi(payload) → Promise<string>（Worker 回的 content）；錯誤若帶 fatal=true（429、503、被擋）則整個中止。
   async function runPipeline(o){
     const lines=o.lines, callApi=o.callApi;
-    const prog=p=>{ try{ o.onProgress && o.onProgress(p); }catch(e){} };
+    let aborted=false;
+    const prog=p=>{ if(aborted) return; try{ o.onProgress && o.onProgress(p); }catch(e){} };   // 中止後晚到的進度不再回報
     prog({stage:'format',done:0,total:1});
     const sample=toWire(sampleForFormat(lines));
     let fmt=null, lastErr=null;
@@ -1659,7 +1744,7 @@ const TSP=(function(){
       done++; prog({stage:'label',done,total:chunks.length,failed:failed.length});
     }
     const conc=Math.max(1,o.concurrency||3);
-    let next=0, aborted=false;
+    let next=0;
     await Promise.all(Array.from({length:Math.min(conc,chunks.length)},async()=>{
       while(!aborted && next<chunks.length){
         const ci=next++;
@@ -1675,6 +1760,157 @@ const TSP=(function(){
   return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
+
+/* ============================================================
+   校正操作核心（純函式，直接修改傳入的 v2 劇本資料；測試會抽出這一段執行）
+   EDITOR-CORE:BEGIN
+   ============================================================ */
+const TSE=(function(){
+  const stripMarks=s=>String(s==null?'':s).replace(/[⟦⟧]/g,'');
+  const kindOf=l=>l.d!==undefined?'D':l.x!==undefined?'X':'S';
+  // 編輯框顯示的完整文字：台詞用含指示的原文 r（沒有就用 t），指示／雜訊用原文
+  const fullText=l=>l.d!==undefined?l.d:l.x!==undefined?l.x:(l.r!==undefined?l.r:l.t);
+  const joinText=(a,b)=>!a?b:(/[A-Za-z0-9]$/.test(a)&&/^[A-Za-z0-9]/.test(b))?a+' '+b:a+b;
+  const cleanId=x=>String(x==null?'':x).trim().replace(/[<>&"'\/]/g,'');
+
+  // 由種類／角色／文字建出一行。S 的文字依規格 4 重新拆成 t（去指示）與 r（含指示原文）；
+  // 台詞只剩指示時自動轉成指示行。使用者在文字裡自己加的 ⟦…⟧ 會保留。
+  function makeLine(kind, roles, text){
+    text=String(text==null?'':text);
+    if(kind==='D') return {d:stripMarks(text)};
+    if(kind==='X') return {x:stripMarks(text)};
+    if(!roles || !roles.length) throw new Error('台詞需要指定角色');
+    const sd=TSP.stripDirections(text);
+    if(!sd.t.trim()) return {d:stripMarks(text)};
+    const o={s:roles.join('/'), t:sd.t.indexOf('⟦')>=0?sd.t:TSP.markJapanese(sd.t)};
+    if(sd.had) o.r=stripMarks(text);
+    return o;
+  }
+  // 取出台詞行的角色陣列
+  const rolesOf=l=>l.s?l.s.split('/').filter(Boolean):[];
+
+  function setLine(data,si,li,kind,roles,text){
+    const sc=data.scenes[si];
+    const nl=makeLine(kind,roles,text);
+    sc.lines[li]=nl;
+    return nl;
+  }
+  // 與上一行合併（同一場內；略過中間的雜訊行）。回傳合併後那行的索引，不能合併回傳 -1。
+  function mergePrev(data,si,li){
+    const ls=data.scenes[si].lines;
+    let j=li-1; while(j>=0 && ls[j].x!==undefined) j--;
+    if(j<0) return -1;
+    const a=ls[j], b=ls[li];
+    if(a.x!==undefined) return -1;
+    const ta=fullText(a), tb=fullText(b);
+    let merged;
+    if(a.d!==undefined) merged={d:stripMarks(joinText(ta,tb))};
+    else merged=makeLine('S',rolesOf(a),joinText(ta,tb));   // 前一行是台詞：後一行當續行併入
+    ls[j]=merged;
+    ls.splice(li,1);
+    return j;
+  }
+  // 在文字位置 pos 拆成兩行（pos 是 fullText 的字元位置）。兩行種類與角色相同。回傳新的第二行索引。
+  function splitAt(data,si,li,kind,roles,text,pos){
+    text=String(text==null?'':text);
+    if(!(pos>0 && pos<text.length)) throw new Error('請把游標放在要拆開的位置');
+    const a=text.slice(0,pos).replace(/\s+$/,''), b=text.slice(pos).replace(/^\s+/,'');
+    if(!a || !b) throw new Error('請把游標放在要拆開的位置');
+    data.scenes[si].lines.splice(li,1,makeLine(kind,roles,a),makeLine(kind,roles,b));
+    return li+1;
+  }
+  function splitLine(data,si,li,pos){
+    const l=data.scenes[si].lines[li];
+    return splitAt(data,si,li,kindOf(l),rolesOf(l),fullText(l),pos);
+  }
+  function uniqueNo(data,want){
+    const used=new Set(data.scenes.map(s=>s.no));
+    let no=String(want||'').trim()||('第'+(data.scenes.length+1)+'段');
+    if(!used.has(no)) return no;
+    let k=2; while(used.has(no+'#'+k)) k++;
+    return no+'#'+k;
+  }
+  // 在 (si,li) 這一行之前插入場次分隔：該行起的內容成為新場次
+  function insertSceneBefore(data,si,li,heading){
+    const sc=data.scenes[si];
+    if(li<=0) throw new Error('場次的第一行前面不能再插入分隔');
+    const m=TSP.parseHeading(heading||'');
+    const ns={no:uniqueNo(data,m.no||heading), name:m.name||'', season:m.season||'', place:m.place||'', lines:sc.lines.splice(li)};
+    data.scenes.splice(si+1,0,ns);
+    return si+1;
+  }
+  // 移除場次分隔：這一場併入上一場
+  function removeSceneBreak(data,si){
+    if(si<=0) throw new Error('第一個場次沒有上一場可併入');
+    const prev=data.scenes[si-1];
+    prev.lines.push(...data.scenes[si].lines);
+    data.scenes.splice(si,1);
+    return si-1;
+  }
+  function setSceneField(data,si,field,val){
+    if(field==='no'){
+      const want=String(val||'').trim(); if(!want) throw new Error('場次名稱不能空白');
+      if(data.scenes.some((s,i)=>i!==si && s.no===want)) throw new Error('已有同名的場次');
+      data.scenes[si].no=want;
+    }else data.scenes[si][field]=String(val||'').trim();
+  }
+
+  // ---------- 角色 ----------
+  function roleUsage(data){
+    const m=new Map(data.roles.map(r=>[r.id,0]));
+    for(const sc of data.scenes) for(const l of sc.lines) if(l.s) for(const id of l.s.split('/')) m.set(id,(m.get(id)||0)+1);
+    return m;
+  }
+  function addRole(data,id,name,gender){
+    id=cleanId(id); if(!id) throw new Error('角色代號不能空白');
+    if(data.roles.some(r=>r.id===id)) throw new Error('已有這個角色');
+    const r={id, name:String(name||'').trim()||id, aliases:[], gender:(gender==='m'||gender==='f')?gender:'n', spoken:id};
+    data.roles.push(r); return r;
+  }
+  function renameRole(data,oldId,newId,newName){
+    const r=data.roles.find(x=>x.id===oldId); if(!r) throw new Error('找不到角色');
+    newId=cleanId(newId)||oldId;
+    if(newId!==oldId){
+      if(data.roles.some(x=>x.id===newId)) throw new Error('已有同名的角色代號，請改用「合併角色」');
+      for(const sc of data.scenes) for(const l of sc.lines) if(l.s) l.s=l.s.split('/').map(x=>x===oldId?newId:x).join('/');
+      if(r.spoken===oldId) r.spoken=newId;
+      r.id=newId;
+    }
+    if(newName!=null && String(newName).trim()) r.name=String(newName).trim();
+    return r;
+  }
+  function setGender(data,id,g){ const r=data.roles.find(x=>x.id===id); if(r) r.gender=(g==='m'||g==='f')?g:'n'; }
+  // 合併：src 的所有台詞改成 dst，src 的稱呼併入 dst 的別名，移除 src
+  function mergeRoles(data,src,dst){
+    if(src===dst) throw new Error('不能合併到自己');
+    const a=data.roles.find(x=>x.id===src), b=data.roles.find(x=>x.id===dst);
+    if(!a||!b) throw new Error('找不到角色');
+    for(const sc of data.scenes) for(const l of sc.lines) if(l.s){
+      const ids=l.s.split('/').map(x=>x===src?dst:x);
+      l.s=ids.filter((x,i)=>ids.indexOf(x)===i).join('/');
+    }
+    for(const al of [a.id,a.name,...(a.aliases||[])]) if(al && al!==b.id && al!==b.name && !(b.aliases||[]).includes(al)) (b.aliases=b.aliases||[]).push(al);
+    data.roles.splice(data.roles.indexOf(a),1);
+    return b;
+  }
+  function deleteRole(data,id){
+    if((roleUsage(data).get(id)||0)>0) throw new Error('這個角色還有台詞，請先改角色或合併');
+    const i=data.roles.findIndex(x=>x.id===id); if(i>=0) data.roles.splice(i,1);
+  }
+
+  // ---------- 待校正 ----------
+  function pending(data){
+    const out=[];
+    data.scenes.forEach((sc,si)=>sc.lines.forEach((l,li)=>{ if(l.rv) out.push({si,li}); }));
+    return out;
+  }
+  function clearRv(data,si,li){ const l=data.scenes[si].lines[li]; if(l) delete l.rv; }
+
+  return {stripMarks,kindOf,fullText,rolesOf,makeLine,setLine,mergePrev,splitAt,splitLine,uniqueNo,insertSceneBefore,removeSceneBreak,setSceneField,
+    roleUsage,addRole,renameRole,setGender,mergeRoles,deleteRole,pending,clearRv};
+})();
+/* EDITOR-CORE:END */
+
 
 /* ============================================================
    渲染與互動
@@ -1852,7 +2088,7 @@ function diffMark(you, ans){
   return {yMark,aMark};
 }
 
-function esc(s){ return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function scoreAnswer(answer, target){
   const you=normForCompare(answer);
@@ -1916,7 +2152,7 @@ function selectScene(i){
   sceneNameEl.textContent=sc.name;
   const meta=[];
   if(sc.place) meta.push("地點："+sc.place);
-  sceneMetaEl.innerHTML = (sc.season? `<span class="season">${sc.season}</span>　`:"") + meta.join("　");
+  sceneMetaEl.innerHTML = (sc.season? `<span class="season">${esc(sc.season)}</span>　`:"") + esc(meta.join("　"));   // 劇本內容可能來自上傳或他人匯出的 JSON，一律跳脫
   renderLines();
   window.scrollTo({top:0,behavior:'smooth'});
 }
@@ -2235,7 +2471,7 @@ function buildStatsView(){
 
   const att=STATS.attempts;
   if(!att.length && practiced===0){
-    statsBody.innerHTML=`<div class="empty-note">${roleLabel} 還沒有測驗紀錄。開「測驗模式」，輸入台詞按「對答案」後，成績會記在這部裝置（依角色分開）。</div>`;
+    statsBody.innerHTML=`<div class="empty-note">${esc(roleLabel)} 還沒有測驗紀錄。開「測驗模式」，輸入台詞按「對答案」後，成績會記在這部裝置（依角色分開）。</div>`;
     return;
   }
   const total=att.length;
@@ -2252,7 +2488,7 @@ function buildStatsView(){
   html+='<div style="font-size:.8rem;color:var(--muted);margin:2px 0 12px;">每格＝一句台詞（長獨白每節一格）　<span style="color:#3a9d63">■</span> 已掌握（≥'+MASTER_THRESHOLD+'%）　<span style="color:var(--gold)">■</span> 練過未達標　<span style="color:var(--paper-edge)">■</span> 未練</div>';
   for(const r of sceneRows){
     const sp=Math.round(r.mastered/r.total*100);
-    html+=`<div class="strip-row"><div class="sr-head"><span>${sceneName(r.no)}</span><span class="sr-pct">${r.mastered}/${r.total} 掌握 · ${sp}%</span></div>`+
+    html+=`<div class="strip-row"><div class="sr-head"><span>${esc(sceneName(r.no))}</span><span class="sr-pct">${r.mastered}/${r.total} 掌握 · ${sp}%</span></div>`+
       `<div class="mastery-strip">`+
       r.cells.map(c=>`<span class="cell ${c==='done'?'done':c==='partial'?'partial':''}"></span>`).join('')+
       `</div></div>`;
@@ -2959,6 +3195,17 @@ function downloadBlob(blob, filename){
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
+// iOS Safari（還沒加入主畫面、且沒按過「知道了」）才提示
+const HINT_KEY='tsj_hint_a2hs';
+function showInstallHint(){
+  try{
+    const ios=/iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+    const standalone=navigator.standalone===true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+    return ios && !standalone && localStorage.getItem(HINT_KEY)!=='1';
+  }catch(e){ return false; }
+}
+document.getElementById('homeInstallClose').onclick=()=>{ try{ localStorage.setItem(HINT_KEY,'1'); }catch(e){} document.getElementById('homeInstall').style.display='none'; };
+
 async function showHome(){
   stopSpeak();
   CUR=null;
@@ -2974,6 +3221,7 @@ async function renderHome(){
   try{ list=await Store.all('scripts'); }catch(e){ toast('讀取劇本失敗：'+(e&&e.message||e)); }
   list.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
   document.getElementById('homeMemWarn').style.display = Store.persistent ? 'none' : 'block';
+  document.getElementById('homeInstall').style.display = showInstallHint() ? 'block' : 'none';
   homeList.innerHTML='';
   if(!list.length){
     const e=document.createElement('div');
@@ -3000,6 +3248,7 @@ async function renderHome(){
       b.onclick=(e)=>{ e.stopPropagation(); fn(); }; acts.appendChild(b);
     };
     mk('開啟',()=>openScript(rec.id));
+    mk('校正',()=>openReview(rec.id));
     mk('重新命名',()=>renameScript(rec.id));
     mk('匯出',()=>exportScript(rec.id));
     mk('刪除',()=>deleteScript(rec.id),'danger');
@@ -3071,7 +3320,7 @@ async function importScriptText(text, filename){
   let raw;
   try{ raw=JSON.parse(text); }catch(e){ throw new Error('檔案不是有效的 JSON'); }
   const base=(filename||'').replace(/\.[^.]*$/,'');
-  const data=normalizeScript(raw, base);
+  const data=normalizeScript(raw, base, {keepNoise:true});
   const hash=data.meta.sourceHash || await sha256Hex(text);
   data.meta.sourceHash=hash;
   const now=Date.now();
@@ -3303,6 +3552,8 @@ async function runParse(){
   const src=SRC; if(!src || PARSE.running) return;
   const title=(addTitle.value||'').trim()||src.title||'未命名劇本';
   PARSE.cancelled=false; PARSE.running=true;
+  const runToken=PARSE.token=(PARSE.token||0)+1;      // 失敗／取消後，晚到的進度事件不得蓋掉結果畫面
+  const live=()=>PARSE.running && PARSE.token===runToken && !PARSE.cancelled;
   showView('parse');
   document.title='解析中 — 台詞小精靈';
   setParseUI({stage:'準備中…',pct:0,cancel:true});
@@ -3314,6 +3565,7 @@ async function runParse(){
       result=await TSP.runPipeline({
         lines:src.lines, callApi:workerCall, concurrency:3,
         onProgress:p=>{
+          if(!live()) return;
           if(p.stage==='format') setParseUI({stage:'分析劇本格式…',pct:p.done?8:3,cancel:true,detail:p.roles?'找到 '+p.roles+' 個角色':''});
           else setParseUI({stage:'逐行標記台詞（第 '+Math.min(p.done+1,p.total)+'／'+p.total+' 段）',pct:8+Math.round(90*p.done/p.total),cancel:true,
             detail:p.failed?p.failed+' 段自動標記失敗，會改用規則先標並請你檢查':''});
@@ -3337,10 +3589,10 @@ async function runParse(){
     setParseUI({stage:cancelled?'已取消':'解析失敗',pct:0,actions:true,err:cancelled?'':(err&&err.message||String(err))});
   }
 }
-// 解析完成後的去向（步驟 5 會改成先進校正頁）
+// 解析完成後先進校正頁
 function afterParse(rec){
-  if(rec.parse.failedChunks) toast(rec.parse.failedChunks+' 段自動標記失敗，已用規則先標，請檢查');
-  openScript(rec.id);
+  if(rec.parse.failedChunks) toast(rec.parse.failedChunks+' 段自動標記失敗，已用規則先標，請在校正頁檢查');
+  openReview(rec.id);
 }
 
 addNext.onclick=startParseFlow;
@@ -3350,7 +3602,209 @@ document.getElementById('parseRetry').onclick=()=>runParse();
 document.getElementById('consentOk').onclick=()=>{ setConsent(); document.getElementById('consentModal').style.display='none'; runParse(); };
 document.getElementById('consentNo').onclick=()=>{ document.getElementById('consentModal').style.display='none'; };
 
+/* ============================================================
+   預覽校正：行列表、單行修改、場次分隔、角色管理（操作本身在 EDITOR-CORE 的 TSE）
+   ============================================================ */
+const REV={rec:null, data:null, open:null, showNoise:false, cursor:-1};
+const rvBody=document.getElementById('rvBody');
+const rolesModal=document.getElementById('rolesModal');
+function el(tag,cls,text){ const e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; }
+const revColor=id=>{ const i=REV.data.roles.findIndex(r=>r.id===id); return ROLE_PALETTE[(i<0?0:i)%ROLE_PALETTE.length]; };
+const revRoleName=id=>{ const r=REV.data.roles.find(x=>x.id===id); return r?(r.name||id):id; };
+
+async function openReview(id){
+  const rec=await Store.get('scripts',id);
+  if(!rec){ toast('找不到這份劇本'); return showHome(); }
+  let data;
+  try{ data=normalizeScript(rec.data, rec.title, {keepNoise:true}); }
+  catch(e){ toast('這份劇本資料損毀：'+e.message); return; }
+  rec.data=data;
+  REV.rec=rec; REV.data=data; REV.open=null; REV.cursor=-1;
+  stopSpeak(); CUR=null;
+  showView('review');
+  document.title='校正《'+rec.title+'》— 台詞小精靈';
+  document.getElementById('rvTitle').textContent=rec.title;
+  revRender();
+  window.scrollTo(0,0);
+  const p=TSE.pending(data).length;
+  document.getElementById('rvHelp').textContent=p
+    ? '有 '+p+' 行自動標記不確定（橘色邊框），建議先看一遍；按「待校正」可一鍵跳到下一行。點一行可修改，每次修改都會自動存檔。'
+    : '點一行可修改，每次修改都會自動存檔。確認沒問題就按「完成，開始背誦」。';
+}
+function revPersist(){
+  REV.rec.updatedAt=Date.now();
+  Store.put('scripts',REV.rec).catch(()=>toast('儲存失敗'));
+  document.getElementById('rvPend').textContent=TSE.pending(REV.data).length;
+}
+function revRender(){
+  rvBody.innerHTML='';
+  REV.data.scenes.forEach((_,si)=>rvBody.appendChild(revSceneEl(si)));
+  document.getElementById('rvPend').textContent=TSE.pending(REV.data).length;
+}
+function revRerenderScene(si){
+  const old=rvBody.children[si]; if(!old) return revRender();
+  rvBody.replaceChild(revSceneEl(si),old);
+  document.getElementById('rvPend').textContent=TSE.pending(REV.data).length;
+}
+function revSceneEl(si){
+  const sc=REV.data.scenes[si], sec=el('section','rv-scene');
+  const head=el('div','rv-scene-head');
+  const field=(cls,key,ph)=>{
+    const i=el('input',cls); i.value=sc[key]||''; i.placeholder=ph; i.setAttribute('aria-label',ph);
+    i.onchange=()=>{
+      try{ TSE.setSceneField(REV.data,si,key,i.value); revPersist(); }
+      catch(e){ toast(e.message); i.value=sc[key]||''; }
+    };
+    return i;
+  };
+  head.appendChild(field('f-no','no','場次')); head.appendChild(field('f-name','name','場名'));
+  head.appendChild(field('f-season','season','季節')); head.appendChild(field('f-place','place','地點'));
+  if(si>0){
+    const b=el('button','ghost-btn','併入上一場'); b.title='移除這個場次分隔';
+    b.onclick=()=>{
+      if(!confirm('移除「'+sc.no+'」的場次分隔，內容併入上一場？')) return;
+      try{ TSE.removeSceneBreak(REV.data,si); REV.open=null; revPersist(); revRender(); }catch(e){ toast(e.message); }
+    };
+    head.appendChild(b);
+  }
+  sec.appendChild(head);
+  sc.lines.forEach((l,li)=>{
+    const isOpen=REV.open && REV.open.si===si && REV.open.li===li;
+    if(l.x!==undefined && !REV.showNoise && !isOpen) return;
+    sec.appendChild(revRowEl(si,li));
+  });
+  return sec;
+}
+function revRowEl(si,li){
+  const l=REV.data.scenes[si].lines[li], k=TSE.kindOf(l);
+  const isOpen=REV.open && REV.open.si===si && REV.open.li===li;
+  const row=el('div','rv-row k-'+k+(l.rv?' rv':'')+(isOpen?' open':''));
+  row.dataset.si=si; row.dataset.li=li;
+  const main=el('div','rv-main');
+  main.appendChild(el('span','rv-chip',k==='S'?'台詞':k==='D'?'指示':'雜訊'));
+  if(k==='S'){
+    const seals=el('span','rv-seals');
+    TSE.rolesOf(l).forEach(id=>{ const s=el('span','rv-seal',sealText(id)); s.style.background=revColor(id); s.title=revRoleName(id); seals.appendChild(s); });
+    main.appendChild(seals);
+  }
+  main.appendChild(el('span','rv-text',TSE.fullText(l)));
+  row.appendChild(main);
+  if(isOpen) row.appendChild(revEditor(si,li));
+  else row.onclick=()=>revOpen(si,li);
+  return row;
+}
+function revOpen(si,li){
+  const prev=REV.open;
+  REV.open={si,li};
+  if(prev && prev.si!==si) revRerenderScene(prev.si);
+  revRerenderScene(si);
+  const r=rvBody.querySelector('.rv-row.open textarea'); if(r) r.focus();
+}
+function revClose(si){ REV.open=null; revRerenderScene(si); }
+
+function revEditor(si,li){
+  const sc=REV.data.scenes[si], l=sc.lines[li];
+  const st={kind:TSE.kindOf(l), roles:new Set(TSE.rolesOf(l))};
+  if(st.kind==='S' && !st.roles.size) st.roles.add(REV.data.roles[0]&&REV.data.roles[0].id);
+  const ed=el('div','rv-edit');
+  ed.onclick=e=>e.stopPropagation();
+  const seg=el('div','rv-seg'), chips=el('div','rv-rolechips');
+  const paint=()=>{
+    [...seg.children].forEach(b=>b.setAttribute('aria-pressed',b.dataset.k===st.kind?'true':'false'));
+    chips.style.display=st.kind==='S'?'flex':'none';
+    [...chips.children].forEach(b=>b.setAttribute('aria-pressed',st.roles.has(b.dataset.id)?'true':'false'));
+  };
+  [['S','台詞'],['D','指示'],['X','雜訊']].forEach(([k,t])=>{ const b=el('button',null,t); b.dataset.k=k; b.onclick=()=>{ st.kind=k; if(k==='S' && !st.roles.size && REV.data.roles[0]) st.roles.add(REV.data.roles[0].id); paint(); }; seg.appendChild(b); });
+  REV.data.roles.forEach(r=>{ const b=el('button','rv-rolechip',r.name||r.id); b.dataset.id=r.id; b.onclick=()=>{ if(st.roles.has(r.id)) st.roles.delete(r.id); else st.roles.add(r.id); paint(); }; chips.appendChild(b); });
+  ed.appendChild(seg); ed.appendChild(chips);
+  const ta=el('textarea'); ta.value=TSE.fullText(l);
+  ed.appendChild(ta);
+  const rolesNow=()=>REV.data.roles.filter(r=>st.roles.has(r.id)).map(r=>r.id);
+  const done=(fn)=>{ try{ fn(); REV.open=null; revPersist(); revRerenderScene(si); }catch(e){ toast(e.message); } };
+  const btns=el('div','rv-btns');
+  const add=(label,fn,cls)=>{ const b=el('button','ghost-btn'+(cls?' '+cls:''),label); b.onclick=fn; btns.appendChild(b); return b; };
+  add('儲存',()=>done(()=>TSE.setLine(REV.data,si,li,st.kind,rolesNow(),ta.value)),'primary-solid');
+  add('取消',()=>revClose(si));
+  if(l.rv) add('✓ 沒問題',()=>done(()=>TSE.clearRv(REV.data,si,li)));
+  add('與上一行合併',()=>{ try{ const j=TSE.mergePrev(REV.data,si,li); if(j<0) return toast('前面沒有可以合併的行'); REV.open=null; revPersist(); revRerenderScene(si); }catch(e){ toast(e.message); } });
+  add('在游標處拆成兩行',()=>done(()=>TSE.splitAt(REV.data,si,li,st.kind,rolesNow(),ta.value,ta.selectionStart)));
+  if(li>0) add('在此行前插入場次',()=>{
+    const h=prompt('新場次的標題（例：第三場　場名）','');
+    if(h===null) return;
+    try{ TSE.insertSceneBefore(REV.data,si,li,h); REV.open=null; revPersist(); revRender(); }catch(e){ toast(e.message); }
+  });
+  ed.appendChild(btns);
+  paint();
+  return ed;
+}
+
+// 一鍵跳到下一個待校正行
+document.getElementById('rvNext').onclick=()=>{
+  const p=TSE.pending(REV.data);
+  if(!p.length) return toast('沒有待校正的行了');
+  REV.cursor=(REV.cursor+1)%p.length;
+  const {si,li}=p[REV.cursor];
+  const row=rvBody.querySelector('.rv-row[data-si="'+si+'"][data-li="'+li+'"]');
+  rvBody.querySelectorAll('.rv-row.flash').forEach(r=>r.classList.remove('flash'));
+  if(row){ row.scrollIntoView({block:'center',behavior:'smooth'}); void row.offsetWidth; row.classList.add('flash'); }
+};
+document.getElementById('rvNoise').onclick=(e)=>{
+  REV.showNoise=!REV.showNoise;
+  e.currentTarget.setAttribute('aria-pressed',REV.showNoise?'true':'false');
+  revRender();
+};
+document.getElementById('rvBack').onclick=()=>showHome();
+document.getElementById('rvDone').onclick=()=>openScript(REV.rec.id);
+
+// ---------- 角色面板 ----------
+function revRenderRoles(){
+  const list=document.getElementById('rolesList'); list.innerHTML='';
+  const usage=TSE.roleUsage(REV.data);
+  REV.data.roles.forEach(r=>{
+    const row=el('div','r-row');
+    const seal=el('span','rv-seal',sealText(r.id)); seal.style.background=revColor(r.id); row.appendChild(seal);
+    const idI=el('input','r-id'); idI.value=r.id; idI.setAttribute('aria-label','代號'); row.appendChild(idI);
+    const nmI=el('input','r-name'); nmI.value=r.name; nmI.setAttribute('aria-label','全名'); row.appendChild(nmI);
+    const apply=()=>{ try{ TSE.renameRole(REV.data,r.id,idI.value,nmI.value); revPersist(); revRenderRoles(); revRender(); }catch(e){ toast(e.message); idI.value=r.id; nmI.value=r.name; } };
+    idI.onchange=apply; nmI.onchange=apply;
+    const g=el('select'); g.setAttribute('aria-label','性別');
+    [['n','性別不明'],['m','男'],['f','女']].forEach(([v,t])=>{ const o=el('option',null,t); o.value=v; if(r.gender===v) o.selected=true; g.appendChild(o); });
+    g.onchange=()=>{ TSE.setGender(REV.data,r.id,g.value); revPersist(); };
+    row.appendChild(g);
+    row.appendChild(el('span','r-use',(usage.get(r.id)||0)+' 句'));
+    const others=REV.data.roles.filter(x=>x.id!==r.id);
+    if(others.length){
+      const ms=el('select'); ms.setAttribute('aria-label','合併到');
+      const o0=el('option',null,'合併到…'); o0.value=''; ms.appendChild(o0);
+      others.forEach(x=>{ const o=el('option',null,x.name||x.id); o.value=x.id; ms.appendChild(o); });
+      ms.onchange=()=>{
+        if(!ms.value) return;
+        const dst=ms.value;
+        if(!confirm('把「'+(r.name||r.id)+'」的所有台詞合併給「'+revRoleName(dst)+'」？')){ ms.value=''; return; }
+        try{ TSE.mergeRoles(REV.data,r.id,dst); revPersist(); revRenderRoles(); revRender(); }catch(e){ toast(e.message); }
+      };
+      row.appendChild(ms);
+    }
+    const del=el('button','ghost-btn danger','刪除');
+    del.disabled=(usage.get(r.id)||0)>0; del.title=del.disabled?'還有台詞，不能刪除':'';
+    del.onclick=()=>{ try{ TSE.deleteRole(REV.data,r.id); revPersist(); revRenderRoles(); revRender(); }catch(e){ toast(e.message); } };
+    row.appendChild(del);
+    list.appendChild(row);
+  });
+}
+document.getElementById('rvRoles').onclick=()=>{ revRenderRoles(); rolesModal.style.display='flex'; };
+document.getElementById('rolesClose').onclick=()=>{ rolesModal.style.display='none'; };
+rolesModal.addEventListener('click',e=>{ if(e.target===rolesModal) rolesModal.style.display='none'; });
+document.getElementById('newRoleBtn').onclick=()=>{
+  const i=document.getElementById('newRoleId');
+  try{ TSE.addRole(REV.data,i.value); i.value=''; revPersist(); revRenderRoles(); revRender(); }catch(e){ toast(e.message); }
+};
+
 // ===== 啟動 =====
+// PWA：離線可用（只在 https 或 localhost 註冊）
+if('serviceWorker' in navigator && (location.protocol==='https:' || /^(localhost|127\.0\.0\.1)$/.test(location.hostname))){
+  window.addEventListener('load',()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); });
+}
 (async function boot(){
   await Store.open();
   try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist(); }catch(e){}
@@ -3384,7 +3838,7 @@ if(/[?&]voices/.test(location.search)){
     html+='<br><b>角色分配：</b><br>';
     for(const r of ROLE_ORDER){
       const v=roleVoice[r];
-      html+=r+' '+(CHAR_NAMES[r]||'')+' → '+(v?v.name+' ['+v.lang+']':'（無，用音高區分）')+'<br>';
+      html+=esc(r)+' '+esc(CHAR_NAMES[r]||'')+' → '+(v?esc(v.name)+' ['+esc(v.lang)+']':'（無，用音高區分）')+'<br>';
     }
     html+='<div style="margin-top:8px;color:#999;">把網址的 ?voices 去掉即可關閉</div></div>';
     let box=document.getElementById('voiceDiag');

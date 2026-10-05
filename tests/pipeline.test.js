@@ -170,7 +170,10 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(threw && threw.fatal && threw.status === 429, '429 立即中止，不當成塊失敗');
     const v = vs['wrapped'], lines = T.buildLines({ text: v.text }).lines;
     const mock = makeMock(lines, v.gold, { fatal: { after: 3 } });
-    try { await T.runPipeline({ lines, callApi: mock.callApi, concurrency: 3 }); } catch (e) { threw = e; }
+    const events = []; let failedAt = -1;
+    try { await T.runPipeline({ lines, callApi: mock.callApi, concurrency: 3, onProgress: p => events.push(p) }); } catch (e) { threw = e; failedAt = events.length; }
+    await new Promise(r => setTimeout(r, 20));      // 讓還在飛的請求跑完
+    eq(events.length, failedAt, 'fatal 之後不再回報進度（否則會蓋掉錯誤畫面）');
     ok(mock.calls.format + mock.calls.label <= 3 + 3, '遇到 fatal 後不再派發新塊（共 ' + (mock.calls.format + mock.calls.label) + ' 次請求，劇本有 7 塊）');
   }
   // 進度回報

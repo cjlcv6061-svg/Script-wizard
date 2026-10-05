@@ -5,7 +5,7 @@
   "scripts": {
     "check": "node tests/check-syntax.js",
     "fixtures": "node eval/synth.js eval/out/synth && python3 eval/build_docs.py eval/out/synth eval/out/docs",
-    "test": "node tests/check-syntax.js && node tests/parser.test.js && node tests/pipeline.test.js && node tests/worker.test.mjs && node tests/storage.test.js && node tests/legacy-compare.test.js && node tests/extract.browser.test.js && node tests/e2e.browser.test.js",
+    "test": "node tests/check-syntax.js && node tests/parser.test.js && node tests/pipeline.test.js && node tests/editor.test.js && node tests/worker.test.mjs && node tests/storage.test.js && node tests/legacy-compare.test.js && node tests/extract.browser.test.js && node tests/review.browser.test.js && node tests/e2e.browser.test.js",
     "eval": "node eval/run.mjs --mode heuristic --docs"
   },
   "devDependencies": {

@@ -111,6 +111,24 @@ const ok = (c, m) => { assert(c, m); pass++; };
   ev(m.w, 'recordAttempt("序場", 1, "玲", 90)'); await sleep(10);
   ok(ev(m.w, 'STATS.best["序場|1"]') === 90, '記憶體模式也能運作');
 
+  // ---- 11. 劇本內容含 HTML：一律當文字，不得執行 ----
+  {
+    const evil = '<img src=x onerror=window.__pwned=1>';
+    const bad = { schema: 2, meta: { title: evil }, roles: [{ id: 'A', name: evil, aliases: [], gender: 'n' }, { id: evil, name: '<b id=pwn2>x</b>' }],
+      scenes: [{ no: evil, name: evil, season: evil, place: evil, lines: [{ s: 'A', t: evil }, { d: evil }, { s: 'A', t: '再試' }] }] };
+    const rec = await w.importScriptText(JSON.stringify(bad), 'evil.json');
+    await w.renderHome();
+    await w.openScript(rec.id); await w.chooseRole('A');
+    ev(w, 'recordAttempt(SCENES[0].no, 0, "A", 50)');
+    ev(w, 'openStats()');
+    ev(w, 'setNowPlaying("A")');
+    ev(w, 'document.getElementById("pickerBtn").click()');
+    await sleep(30);
+    ok(!w.__pwned && !w.document.querySelector('img[src="x"]') && !w.document.getElementById('pwn2'), '含 HTML 的劇名／場次／角色名／台詞一律當文字顯示');
+    await w.openReview(rec.id);
+    ok(!w.__pwned && !w.document.querySelector('img[src="x"]'), '校正頁同樣不執行 HTML');
+  }
+
   assert.strictEqual(allErrors.length, 0, '頁面不得有未處理錯誤：\n' + allErrors.join('\n'));
   console.log(`✓ storage.test.js：${pass} 項通過`);
 })().catch(e => { console.error('✗', e); process.exit(1); });
