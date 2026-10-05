@@ -1930,7 +1930,12 @@ const TSP=(function(){
       try{ fmt=parseFormat(await callApi({mode:'format', lines:sample})); }
       catch(e){ if(e && e.fatal) throw e; lastErr=e; }
     }
-    if(!fmt) throw new Error('無法辨識劇本格式：'+(lastErr&&lastErr.message||'未知錯誤'));
+    if(!fmt){
+      // 第一段兩次都失敗（小模型面對長人物表常常輸出壞掉）：行首有前綴的劇本，直接用前綴找出角色表，不靠模型繼續
+      const pf=detectPrefix(lines, []);
+      if(!pf.on) throw new Error('無法辨識劇本格式：'+(lastErr&&lastErr.message||'未知錯誤'));
+      fmt={roles:pf.roles, rules:{speaker_pos:'prefix（行首「角色名：」或「角色名 – 」，同一行內接著台詞）', direction:'', heading:'', noise:'', notes:''}};
+    }
     // 前綴優先：行首是「角色名：」的劇本，角色表以文字本身為準（模型的 speaker_pos／角色名常判錯）
     const pm=detectPrefix(lines, fmt.roles);
     if(pm.on) fmt={roles:pm.roles, rules:Object.assign({},fmt.rules,{speaker_pos:'prefix（行首「角色名：」或「角色名 – 」，同一行內接著台詞）'})};

@@ -354,11 +354,19 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(r.stats.failedChunks === 0 && r.stats.retried === 0, '重複列＋怪標籤：沒有整塊失敗、沒有重試（失敗 ' + r.stats.failedChunks + '、重試 ' + r.stats.retried + '）');
     ok(scoreLabels(lines, r.labels, v.gold).acc > 0.99, '行級準確率仍 >99%');
   }
-  // 第一段壞掉兩次 → 丟錯；429 → 立即中止（fatal）
+  // 第一段壞掉兩次：行首有前綴的劇本改用前綴找出角色表、繼續；沒有前綴的劇本才丟錯。429 → 立即中止（fatal）
   {
     let threw = null;
-    try { await run('colon-fw', { alwaysFail: true }); } catch (e) { threw = e; }
-    ok(threw && /無法辨識劇本格式/.test(threw.message), '第一段兩次都壞：丟出明確錯誤');
+    try { await run('centered', { alwaysFail: true }); } catch (e) { threw = e; }
+    ok(threw && /無法辨識劇本格式/.test(threw.message), '第一段兩次都壞、也沒有行首前綴可用：丟出明確錯誤');
+    {
+      const v1 = vs['colon-fw'], lines1 = T.buildLines({ text: v1.text }).lines, mock1 = makeMock(lines1, v1.gold, {});
+      const noFormat = async p => { if (p.mode === 'format') return '{not json'; return mock1.callApi(p); };
+      const r1 = await T.runPipeline({ lines: lines1, callApi: noFormat, concurrency: 1 });
+      ok(['K', '偉', '朗', '玲'].every(id => r1.roles.some(x => x.id === id)), '第一段壞掉：角色表改由行首前綴找出，四個主要角色都在：' + r1.roles.map(x => x.id));      // 另外會多出「四人」「男」這類合說稱呼（行首真的這樣寫）
+      const acc1 = scoreLabels(lines1, r1.labels, v1.gold).acc;
+      ok(r1.stats.failedChunks === 0 && acc1 > 0.97 && r1.scenes.length === 22, '第一段壞掉仍完整解析：22 場、行級 >97%（' + (acc1 * 100).toFixed(2) + '%）');
+    }
     threw = null;
     try { await run('colon-fw', { fatal: { after: 2 } }); } catch (e) { threw = e; }
     ok(threw && threw.fatal && threw.status === 429, '429 立即中止，不當成塊失敗');
