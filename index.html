@@ -705,8 +705,8 @@
   /* ---------- 首頁：我的劇本 ---------- */
   #homeView{display:none;}
   body.home-mode #homeView{display:block;}
-  body.home-mode{min-height:100vh;}
-  body.home-mode > header, body.home-mode > main, body.home-mode > .dock, body.home-mode > .loop-bar{display:none !important;}
+  body.nonapp > header, body.nonapp > main, body.nonapp > .dock, body.nonapp > .loop-bar{display:none !important;}
+  body.nonapp{min-height:100vh;}
   .home-wrap{max-width:720px;margin:0 auto;padding:44px 22px 80px;}
   .home-title{font-family:"Noto Serif TC",serif;font-size:1.9rem;font-weight:900;letter-spacing:.06em;margin:0;}
   .home-title .em{color:var(--vermilion);}
@@ -736,8 +736,6 @@
   /* ---------- 新增劇本 ---------- */
   #addView{display:none;}
   body.add-mode #addView{display:block;}
-  body.add-mode{min-height:100vh;}
-  body.add-mode > header, body.add-mode > main, body.add-mode > .dock, body.add-mode > .loop-bar{display:none !important;}
   .back-link{background:none;border:none;color:var(--muted);font:inherit;font-size:.86rem;cursor:pointer;padding:0 0 14px;}
   .back-link:hover{color:var(--ink);}
   .add-box{border:1px dashed var(--line);border-radius:10px;padding:16px;margin-bottom:16px;}
@@ -748,6 +746,13 @@
   .add-status.bad{color:var(--vermilion);}
   .add-info{font-size:.86rem;color:var(--gold);margin:8px 0 6px;}
   .add-pre{margin:0 0 14px;max-height:240px;overflow:auto;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-family:"Noto Sans Mono",monospace;font-size:.74rem;line-height:1.6;white-space:pre-wrap;word-break:break-all;}
+  /* ---------- 解析進度／同意 ---------- */
+  #parseView{display:none;}
+  body.parse-mode #parseView{display:block;}
+  .prog-track{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin:6px 0 10px;}
+  .prog-fill{height:100%;width:0;background:var(--vermilion);transition:width .3s ease;}
+  .ghost-btn.primary-solid{background:var(--vermilion);border-color:var(--vermilion);color:#fff;}
+  .ghost-btn.primary-solid:hover{background:var(--vermilion-deep);border-color:var(--vermilion-deep);}
 </style>
 </head>
 <body>
@@ -788,6 +793,35 @@
     <div class="add-status" id="addStatus" role="status"></div>
     <div id="addPreview"></div>
     <div class="home-actions"><button class="ghost-btn primary" id="addNext" disabled>下一步</button></div>
+  </div>
+</div>
+<!-- 解析進度 -->
+<div id="parseView">
+  <div class="home-wrap">
+    <h1 class="home-title">解析<span class="em">劇本</span></h1>
+    <p class="home-sub" id="parseStage"></p>
+    <div class="prog-track"><div class="prog-fill" id="parseFill"></div></div>
+    <div class="add-status" id="parseDetail"></div>
+    <div class="add-status bad" id="parseErr" style="display:none"></div>
+    <div class="home-actions" id="parseActions" style="display:none">
+      <button class="ghost-btn primary" id="parseRetry">重試</button>
+      <button class="ghost-btn" id="parseBack">返回</button>
+    </div>
+    <button class="ghost-btn" id="parseCancel">取消</button>
+  </div>
+</div>
+<!-- 同意畫面（一次性） -->
+<div class="modal-backdrop" id="consentModal" style="display:none;z-index:300;">
+  <div class="modal">
+    <h2 class="modal-title">上傳前請先確認</h2>
+    <div class="help-body">
+      <p>為了辨識角色與台詞，你上傳的劇本文字會被傳送到第三方 AI 服務處理。本網站不會在伺服器儲存你的劇本；解析結果只存在你這部裝置的瀏覽器裡。清除瀏覽器資料會讓劇本消失，請使用「匯出」備份。</p>
+      <p>未公開的劇本若有保密需求，請先確認劇團同意再上傳。</p>
+    </div>
+    <div class="modal-actions">
+      <button class="ghost-btn primary-solid" id="consentOk">同意並繼續</button>
+      <button class="ghost-btn" id="consentNo">取消</button>
+    </div>
   </div>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -1048,7 +1082,8 @@ const Store=(function(){
 })();
 
 /* ---------- 劇本正規化：v1 純陣列／v2 物件 → v2 ---------- */
-function normalizeScript(raw, fallbackTitle){
+function normalizeScript(raw, fallbackTitle, opts){
+  const keepNoise=!!(opts && opts.keepNoise);   // 校正頁需要保留被標為雜訊的行（{x}）
   let scenes, roles=[], meta={};
   if(Array.isArray(raw)) scenes=raw;
   else if(raw && typeof raw==='object' && Array.isArray(raw.scenes)){
@@ -1066,13 +1101,15 @@ function normalizeScript(raw, fallbackTitle){
     const lines=[];
     for(const ln of sc.lines){
       if(!ln || typeof ln!=='object') continue;
-      if(typeof ln.d==='string'){ lines.push({d:ln.d}); continue; }
+      if(typeof ln.d==='string'){ const o={d:ln.d}; if(ln.rv) o.rv=true; lines.push(o); continue; }
+      if(typeof ln.x==='string'){ if(keepNoise) lines.push({x:ln.x}); continue; }
       if(typeof ln.s==='string' && typeof ln.t==='string'){
         const s=cleanSpk(ln.s);
         if(!s) continue;
         const o={s, t:ln.t};
         if(typeof ln.r==='string' && ln.r) o.r=ln.r;
         if(Array.isArray(ln.seg) && ln.seg.length && ln.seg.every(x=>typeof x==='string')) o.seg=ln.seg.slice();
+        if(ln.rv) o.rv=true;                       // 待人工校正
         lines.push(o);
       }
     }
@@ -1081,7 +1118,7 @@ function normalizeScript(raw, fallbackTitle){
     usedNo.add(no);
     out.push({no, name:str(sc.name), season:str(sc.season), place:str(sc.place), lines});
   });
-  if(!out.some(sc=>sc.lines.length)) throw new Error('劇本內容為空');
+  if(!out.some(sc=>sc.lines.some(l=>l.x===undefined))) throw new Error('劇本內容為空');
 
   const byId=new Set(), outRoles=[];
   for(const r of roles){
@@ -1111,7 +1148,7 @@ function normalizeScript(raw, fallbackTitle){
     scenes:out
   };
 }
-function countScriptLines(data){ let n=0; for(const sc of data.scenes) for(const ln of sc.lines) if(ln.d===undefined) n++; return n; }
+function countScriptLines(data){ let n=0; for(const sc of data.scenes) for(const ln of sc.lines) if(ln.d===undefined && ln.x===undefined) n++; return n; }
 
 async function sha256Hex(text){
   try{
@@ -1622,9 +1659,12 @@ const TSP=(function(){
       done++; prog({stage:'label',done,total:chunks.length,failed:failed.length});
     }
     const conc=Math.max(1,o.concurrency||3);
-    let next=0;
+    let next=0, aborted=false;
     await Promise.all(Array.from({length:Math.min(conc,chunks.length)},async()=>{
-      while(next<chunks.length){ const ci=next++; await doChunk(ci); }
+      while(!aborted && next<chunks.length){
+        const ci=next++;
+        try{ await doChunk(ci); }catch(e){ aborted=true; throw e; }     // fatal：不再派發新塊，免得白白耗掉每日額度
+      }
     }));
     const asm=assemble(lines, labels, fmt.roles);
     const roles=fmt.roles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
@@ -2975,8 +3015,7 @@ async function openScript(id){
   try{ data=normalizeScript(rec.data, rec.title); }
   catch(e){ toast('這份劇本資料損毀：'+e.message); return; }
   stopSpeak();
-  rec.data=data;
-  CUR={id:rec.id, rec};
+  CUR={id:rec.id, rec};            // rec.data 保持原樣（含雜訊行與待校正旗標）；執行時用的是 normalize 後的 data
   SCENES.length=0; data.scenes.forEach(sc=>SCENES.push(sc));
   applyRoles(data.roles);
   if('speechSynthesis' in window) pickVoice();            // 依新角色性別重新分配語音
@@ -3071,8 +3110,11 @@ document.getElementById('landHome').onclick=()=>showHome();
 /* ============================================================
    新增劇本：取文字（docx／PDF 文字層／貼上）→ 編號行
    ============================================================ */
-const VIEWS=['home','add','review'];
-function showView(name){ VIEWS.forEach(v=>document.body.classList.toggle(v+'-mode', v===name)); }
+const VIEWS=['home','add','parse','review'];
+function showView(name){
+  VIEWS.forEach(v=>document.body.classList.toggle(v+'-mode', v===name));
+  document.body.classList.toggle('nonapp', !!name);     // 非背誦畫面：隱藏背誦介面的頂列／主體／底部控制列
+}
 
 const libLoaded={};
 function loadLib(src){
@@ -3193,6 +3235,120 @@ document.getElementById('addPickBtn').onclick=()=>document.getElementById('addFi
 document.getElementById('addFile').onchange=(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) handleAddFile(f); };
 let addPasteTimer=null;
 document.getElementById('addPaste').addEventListener('input',()=>{ clearTimeout(addPasteTimer); addPasteTimer=setTimeout(handleAddPaste,250); });
+
+/* ============================================================
+   解析流程：同意 → 呼叫 Worker 兩段式標記 → 組回 → 存檔
+   ============================================================ */
+// ★ 站長設定：解析服務（Cloudflare Worker）網址。換自訂網域時只改這一處（Worker 的 ALLOWED_ORIGIN 也要同步）。
+const TSJ_CONFIG={ WORKER_URL:'https://tsj-parse.CHANGE_ME.workers.dev' };
+function workerUrl(){
+  // 本機開發才允許用 ?worker=http://localhost:8787 覆寫
+  try{
+    if(/^(localhost|127\.0\.0\.1)$/.test(location.hostname)){
+      const w=new URLSearchParams(location.search).get('worker'); if(w) return w.replace(/\/+$/,'');
+    }
+  }catch(e){}
+  return TSJ_CONFIG.WORKER_URL.replace(/\/+$/,'');
+}
+const CONSENT_KEY='tsj_consent_v1';
+const hasConsent=()=>{ try{ return localStorage.getItem(CONSENT_KEY)==='1'; }catch(e){ return false; } };
+const setConsent=()=>{ try{ localStorage.setItem(CONSENT_KEY,'1'); }catch(e){} };
+
+const fatalErr=(msg,status)=>Object.assign(new Error(msg),{fatal:true,status});
+const PARSE={cancelled:false, running:false};
+
+// 對 Worker 發一次請求，回傳模型內容字串。429／503／被擋 → fatal（整個解析中止）；502（模型輸出壞掉）→ 非 fatal（該塊重試）。
+async function workerCall(payload){
+  if(PARSE.cancelled) throw fatalErr('已取消');
+  if(/CHANGE_ME/.test(workerUrl())) throw fatalErr('尚未設定解析服務網址（TSJ_CONFIG.WORKER_URL）');
+  let res;
+  for(let a=0;a<2;a++){
+    try{
+      res=await fetch(workerUrl()+'/parse',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});
+      break;
+    }catch(e){
+      if(a===1) throw fatalErr('無法連線到解析服務，請檢查網路後再試');
+      await new Promise(r=>setTimeout(r,800));
+    }
+  }
+  if(PARSE.cancelled) throw fatalErr('已取消');
+  let body=null; try{ body=await res.json(); }catch(e){}
+  if(res.status===429) throw fatalErr(body&&body.reason==='global'?'今天全站的解析次數已用完，請明天再試':'你今天的解析次數已用完（每人每日有上限），請明天再試',429);
+  if(res.status===503) throw fatalErr('服務暫時無法使用，請稍後再試',503);
+  if(res.status===502) throw new Error('模型回應格式不正確');
+  if(res.status===413) throw fatalErr('劇本片段過大，無法解析',413);
+  if(res.status===403) throw fatalErr('解析服務拒絕了這個來源（網站網址與 Worker 的 ALLOWED_ORIGIN 不符）',403);
+  if(!res.ok || !body || typeof body.content!=='string') throw fatalErr('解析服務回應異常（'+res.status+'）',res.status);
+  return body.content;
+}
+
+const parseView=document.getElementById('parseView');
+function setParseUI(o){
+  document.getElementById('parseStage').textContent=o.stage||'';
+  document.getElementById('parseFill').style.width=(o.pct||0)+'%';
+  document.getElementById('parseDetail').textContent=o.detail||'';
+  document.getElementById('parseActions').style.display=o.actions?'flex':'none';
+  document.getElementById('parseCancel').style.display=o.cancel?'inline-block':'none';
+  document.getElementById('parseErr').textContent=o.err||'';
+  document.getElementById('parseErr').style.display=o.err?'block':'none';
+}
+
+async function startParseFlow(){
+  if(!SRC) return;
+  if(!hasConsent()){ document.getElementById('consentModal').style.display='flex'; return; }
+  await runParse();
+}
+
+async function runParse(){
+  const src=SRC; if(!src || PARSE.running) return;
+  const title=(addTitle.value||'').trim()||src.title||'未命名劇本';
+  PARSE.cancelled=false; PARSE.running=true;
+  showView('parse');
+  document.title='解析中 — 台詞小精靈';
+  setParseUI({stage:'準備中…',pct:0,cancel:true});
+  try{
+    // 相同內容不重複呼叫（以內容 SHA-256 為鍵的本機快取）
+    let result=null, cached=false;
+    try{ const c=await Store.get('parseCache',src.hash); if(c && c.result){ result=c.result; cached=true; } }catch(e){}
+    if(!result){
+      result=await TSP.runPipeline({
+        lines:src.lines, callApi:workerCall, concurrency:3,
+        onProgress:p=>{
+          if(p.stage==='format') setParseUI({stage:'分析劇本格式…',pct:p.done?8:3,cancel:true,detail:p.roles?'找到 '+p.roles+' 個角色':''});
+          else setParseUI({stage:'逐行標記台詞（第 '+Math.min(p.done+1,p.total)+'／'+p.total+' 段）',pct:8+Math.round(90*p.done/p.total),cancel:true,
+            detail:p.failed?p.failed+' 段自動標記失敗，會改用規則先標並請你檢查':''});
+        }
+      });
+      // 解析結果只放在本機，供相同內容重用；不含 Worker 以外的任何資料
+      const slim={roles:result.roles, rules:result.rules, scenes:result.scenes, stats:result.stats};
+      try{ await Store.put('parseCache',{hash:src.hash, result:slim, createdAt:Date.now()}); }catch(e){}
+      result=slim;
+    }
+    setParseUI({stage:'整理劇本…',pct:99,cancel:false});
+    const data=normalizeScript({schema:2, meta:{title, lang:'yue', sourceHash:src.hash, created:new Date().toISOString()}, roles:result.roles, scenes:result.scenes}, title, {keepNoise:true});
+    const now=Date.now();
+    const rec={id:newScriptId(), title, hash:src.hash, data, createdAt:now, updatedAt:now, lastRole:'', parse:{failedChunks:result.stats.failedChunks||0, review:result.stats.review||0, cached}};
+    await Store.put('scripts',rec);
+    PARSE.running=false;
+    afterParse(rec);
+  }catch(err){
+    PARSE.running=false;
+    const cancelled=PARSE.cancelled;
+    setParseUI({stage:cancelled?'已取消':'解析失敗',pct:0,actions:true,err:cancelled?'':(err&&err.message||String(err))});
+  }
+}
+// 解析完成後的去向（步驟 5 會改成先進校正頁）
+function afterParse(rec){
+  if(rec.parse.failedChunks) toast(rec.parse.failedChunks+' 段自動標記失敗，已用規則先標，請檢查');
+  openScript(rec.id);
+}
+
+addNext.onclick=startParseFlow;
+document.getElementById('parseCancel').onclick=()=>{ PARSE.cancelled=true; };
+document.getElementById('parseBack').onclick=()=>{ showView('add'); document.title='新增劇本 — 台詞小精靈'; };
+document.getElementById('parseRetry').onclick=()=>runParse();
+document.getElementById('consentOk').onclick=()=>{ setConsent(); document.getElementById('consentModal').style.display='none'; runParse(); };
+document.getElementById('consentNo').onclick=()=>{ document.getElementById('consentModal').style.display='none'; };
 
 // ===== 啟動 =====
 (async function boot(){
