@@ -12,7 +12,7 @@ function makeMock(lines, gold, opts = {}) {
   const al = alignLines(lines.map(l => l.text), gold.map(g => g.text));
   const lab = new Map();
   lines.forEach((l, i) => { const gi = al.pred2gold[i]; lab.set(l.n, gi >= 0 ? { label: gold[gi].label, role: gold[gi].role } : { label: 'N', role: '' }); });
-  const calls = { format: 0, label: 0 };
+  const calls = { format: 0, label: 0, roles: 0 };
   const rng = mulberry32(opts.seed || 1);
   const ids = ROLES.map(r => r.id);
   async function callApi(payload) {
@@ -21,6 +21,10 @@ function makeMock(lines, gold, opts = {}) {
       calls.format++;
       if (opts.alwaysFail) return '{not json';
       return JSON.stringify({ roles: ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(a => a !== r.id), gender: GENDER[r.id] || 'n' })), rules: { speaker_pos: 'mock' } });
+    }
+    if (payload.mode === 'roles') {                       // 候選稱呼分類：預設把每個候選都當角色（R）；opts.roles(candidates) 可自訂
+      calls.roles++;
+      return opts.roles ? opts.roles(payload.candidates, payload.roles) : payload.candidates.map(c => c[0] + '|R|').join('\n');
     }
     calls.label++;
     const rows = payload.lines.map(([n]) => {

@@ -81,6 +81,23 @@ N  雜訊：頁碼、頁眉頁尾、封面、目錄、作者與版權資訊、�
 23|S|乙
 24|C|`;
 
+const ROLES_SYSTEM = `你是「劇本稱呼分類器」。使用者會給你一份已知角色清單，以及一張「候選稱呼表」。
+候選稱呼是程式從劇本每一行的行首（後面接冒號或破折號）統計出來的詞，每列格式為「稱呼、Tab 字元、出現次數、Tab 字元、一行例句」。
+你的工作是判斷每個候選稱呼屬於哪一類，對每一個稱呼輸出一行：
+稱呼|類別|對應角色
+只輸出這些行，不要輸出任何其他文字、說明、markdown 圍欄。
+
+類別只能是下列三種：
+R  這是一個會說話的角色。包含次要角色與群眾角色（例如以「眾」開頭的合說、有編號或甲乙丙的路人、職稱）。「對應角色」留空。
+A  這是已知角色清單裡某個角色的簡稱、暱稱、不同寫法或加了註記的寫法。「對應角色」必須填清單裡的 id。只有確定指的是同一個人才用 A；不確定就用 R。
+N  這不是說話的角色：音效或燈光提示、歌曲名稱、場次或時間地點標記、人物表或表格的欄位名稱、旁白或敘述句的開頭、網址、標題等。「對應角色」留空。
+
+判斷要點：
+1. 看例句：說話的角色，例句會是一句台詞（口語、有語氣）；音效、歌名、場次標記的例句是說明或標題。
+2. 出現次數很多、例句是對話的，幾乎一定是角色。
+3. 每個候選稱呼必須恰好輸出一行，稱呼必須與輸入完全一致；不可新增、不可漏、不可合併、不可改寫。
+4. 「對應角色」只能使用角色清單裡的 id，不可自創。`;
+
 const clip = (s, max = 200) => (s.length <= max ? s : s.slice(0, Math.floor(max * 0.7)) + '…' + s.slice(-Math.floor(max * 0.25)));
 
 function renderLines(lines, clipLen) {
@@ -111,6 +128,13 @@ export function buildMessages(payload) {
       { role: 'user', content: '角色清單：\n' + renderRoles(payload.roles || []) + '\n\n格式說明：\n' + renderRules(payload.rules) + '\n\n請標記以下每一行：\n' + renderLines(payload.lines, 200) }
     ];
   }
+  if (payload.mode === 'roles') {
+    const rows = (payload.candidates || []).map(([t, n, ex]) => `${t}\t${n}\t${clip(String(ex || ''), 60)}`).join('\n');
+    return [
+      { role: 'system', content: ROLES_SYSTEM },
+      { role: 'user', content: '已知角色清單：\n' + (payload.roles && payload.roles.length ? renderRoles(payload.roles) : '（無）') + '\n\n候選稱呼表（稱呼、出現次數、一行例句）：\n' + rows }
+    ];
+  }
   throw new Error('unknown mode');
 }
 
@@ -134,7 +158,7 @@ export function buildRequest(env, payload) {
     model: env.MODEL,
     messages: buildMessages(payload),
     temperature: 0,
-    max_tokens: payload.mode === 'format' ? 3000 : 8000,
+    max_tokens: payload.mode === 'format' || payload.mode === 'roles' ? 3000 : 8000,
     // 只允許清單內供應商，且要求不保留／不訓練
     provider: { order: providers, only: providers, allow_fallbacks: true, data_collection: dataCollection(env) }
   };
@@ -145,7 +169,7 @@ export function buildRequest(env, payload) {
 }
 
 // 只放行結構化內容，避免把劇本原文透過 Worker 回傳。
-// label：只保留「行號|標籤|角色」格式的行；format：解析 JSON 後只重組白名單欄位。
+// label：只保留「行號|標籤|角色」格式的行；roles：只保留「稱呼|類別|對應角色」格式的行；format：解析 JSON 後只重組白名單欄位。
 export function filterOutput(mode, text) {
   const t = String(text || '').replace(/^\s*```[a-z]*\s*|\s*```\s*$/gi, '').trim();
   if (mode === 'label') {
@@ -153,6 +177,14 @@ export function filterOutput(mode, text) {
     for (const raw of t.split(/\r?\n/)) {
       const m = raw.trim().match(/^L?(\d{1,7})\s*[|｜]\s*([SCDHN])\s*(?:[|｜]\s*([^|｜\n]{0,60}))?$/);
       if (m) out.push(`${m[1]}|${m[2]}|${(m[3] || '').trim()}`);
+    }
+    return out.join('\n');
+  }
+  if (mode === 'roles') {
+    const out = [];
+    for (const raw of t.split(/\r?\n/)) {
+      const m = raw.trim().match(/^([^|｜\n]{1,24}?)\s*[|｜]\s*([RNA])\s*(?:[|｜]\s*([^|｜\n]{0,24}))?$/);
+      if (m) out.push(`${m[1].trim()}|${m[2]}|${(m[3] || '').trim()}`);
     }
     return out.join('\n');
   }

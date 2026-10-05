@@ -1732,7 +1732,7 @@ const TSP=(function(){
     for(let m; (m=INLINE_PFX_RE.exec(text)); ) if(surfGet(surf,m[1].trim())) return true;
     return false;
   }
-  // 回傳 {on, roles, prefixLines, added, sep}。on=false 表示這份劇本不是「行首前綴」格式，一切照舊。
+  // 回傳 {on, roles, prefixLines, added, sep, candidates}。on=false 表示這份劇本不是「行首前綴」格式，一切照舊。
   function detectPrefix(lines, roles){
     const surf=buildSurfaceMap(roles);
     let body=0;
@@ -1773,7 +1773,10 @@ const TSP=(function(){
       if(owners.length===1){ owners[0].aliases.push(t); surf2.set(t,owners[0].id); continue; }
       out.push({id, name:id, aliases:[], gender:'n'}); added.push(id);
     }
-    return {on:true, roles:out, prefixLines, added, sep};
+    // 候選稱呼表（交給模型判斷哪些是角色）：模型第一段沒列出、但行首出現 ≥2 次的稱呼，各附一行例句
+    const ex=new Map(); for(const l of lines){ const m=pfxMatch(l.text,sep); if(m) for(const t of m.toks) if(!ex.has(t)) ex.set(t,l.text); }
+    const candidates=[...cnt].filter(([t,c])=>c>=2 && !surfGet(surf,t) && t.length<=24 && !/[|｜]/.test(t)).sort((x,y)=>y[1]-x[1]).slice(0,100).map(([t,c])=>[t,c,(ex.get(t)||'').slice(0,80)]);
+    return {on:true, roles:out, prefixLines, added, sep, candidates};
   }
   // 標記完成後套用：有已知前綴的行一律是台詞；沒有前綴卻被標成台詞的行改用規則標並標為待校正；
   // 夾著別人前綴的行標為待校正。labels 會被就地修改。
@@ -1804,6 +1807,39 @@ const TSP=(function(){
     return st;
   }
 
+  // 候選稱呼分類（第二段之前的一次小請求）：模型對每個候選稱呼回「稱呼|R|」角色、「稱呼|N|」不是角色（音效、歌名、場次…）、
+  // 「稱呼|A|角色id」某個已知角色的簡稱。只認候選表裡的稱呼；對應角色不在清單內的 A 整筆忽略。回傳 Map(稱呼→{k, to?})
+  function parseRoleVerdicts(text, cands, roles){
+    const known=new Set(cands.map(c=>c[0])), surf=buildSurfaceMap(roles), out=new Map();
+    for(const raw of String(text||'').split(/\r\n|\r|\n/)){
+      const m=raw.trim().match(/^(.+?)\s*[|｜]\s*([RNArna])\s*(?:[|｜]\s*(.*))?$/); if(!m) continue;
+      const t=m[1].trim(); if(!known.has(t) || out.has(t)) continue;
+      const k=m[2].toUpperCase();
+      if(k==='A'){ const id=surfGet(surf,stripRoleNote((m[3]||'').trim())); if(id) out.set(t,{k,to:id}); }
+      else out.set(t,{k});
+    }
+    return out;
+  }
+  // 套用判斷：R＝確定是角色（補進清單）；A＝併入已知角色當別名（撤銷自動補進的同名角色）；
+  // N＝不是角色（撤銷自動補進的同名角色；模型第一段自己列的角色不動）。沒有回答的稱呼維持原狀。
+  function applyRoleVerdicts(roles, verdicts, added){
+    const out=roles.map(r=>Object.assign({},r,{aliases:(r.aliases||[]).slice()})), st={role:0, alias:0, noise:0};
+    const idx=id=>out.findIndex(r=>r.id===id);
+    for(const [t,v] of verdicts){
+      const i=idx(t), auto=i>=0 && (added||[]).includes(t);
+      if(v.k==='N'){ if(auto) out.splice(i,1); st.noise++; }
+      else if(v.k==='A'){
+        if(idx(v.to)<0 || v.to===t) continue;
+        if(auto) out.splice(i,1);
+        const j=idx(v.to); if(!out[j].aliases.includes(t)) out[j].aliases.push(t); st.alias++;
+      }else if(v.k==='R'){
+        if(i>=0 || out.some(r=>r.name===t || (r.aliases||[]).includes(t))) continue;
+        const id=cleanId(t); if(!id || id!==t || out.length>=40) continue;
+        out.push({id, name:id, aliases:[], gender:'n'}); st.role++;
+      }
+    }
+    return {roles:out, stats:st};
+  }
   const prefixTokens=(text,sep)=>{ const m=pfxMatch(text,sep); return m?m.toks:[]; };
   // 模型標了清單外的角色，但那一行的行首真的寫著這個稱呼 → 是文字裡的次要角色（第一段樣本沒涵蓋到），
   // 補進清單；否則整塊會因為一個沒見過的角色被判失敗。行首沒寫的（模型自己編的）不採納。
@@ -1939,6 +1975,25 @@ const TSP=(function(){
     // 前綴優先：行首是「角色名：」的劇本，角色表以文字本身為準（模型的 speaker_pos／角色名常判錯）
     const pm=detectPrefix(lines, fmt.roles);
     if(pm.on) fmt={roles:pm.roles, rules:Object.assign({},fmt.rules,{speaker_pos:'prefix（行首「角色名：」或「角色名 – 」，同一行內接著台詞）'})};
+    // 候選稱呼交給模型分類：次要角色（護士、老人甲）、簡稱（楊＝楊淑華）、不是角色的（SD Cue、歌曲三）
+    // 這是選擇性的一步：失敗、回不出可用的答案、Worker 還不認得這個模式（400）都只是略過，維持原本的結果。
+    let roleClassify=null;
+    if(pm.on && pm.candidates.length && o.classifyRoles!==false){
+      prog({stage:'roles'});
+      const known=fmt.roles.filter(r=>!pm.added.includes(r.id)).map(r=>({id:r.id, name:r.name, aliases:r.aliases}));
+      let verdicts=null;
+      for(let a=0;a<2&&!verdicts;a++){
+        try{
+          const v=parseRoleVerdicts(await callApi({mode:'roles', candidates:pm.candidates, roles:known}), pm.candidates, known);
+          if(v.size) verdicts=v;
+        }catch(e){
+          if(e && e.status===400) break;           // Worker 不認得這個模式（還沒更新）：略過
+          if(e && e.fatal) throw e;
+        }
+      }
+      roleClassify={candidates:pm.candidates.length, answered:verdicts?verdicts.size:0};
+      if(verdicts){ const r=applyRoleVerdicts(fmt.roles, verdicts, pm.added); fmt={roles:r.roles, rules:fmt.rules}; Object.assign(roleClassify, r.stats); }
+    }
     prog({stage:'format',done:1,total:1,roles:fmt.roles.length});
 
     const compactRoles=fmt.roles.map(r=>({id:r.id,name:r.name,aliases:r.aliases}));
@@ -1991,10 +2046,10 @@ const TSP=(function(){
     const roles=finalRoles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
     return {roles, rules:fmt.rules, scenes:asm.scenes, labels,
       stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), partialChunkNos:partial.sort((a,b)=>a-b), partialLines, retried, lines:lines.length}, asm.stats,
-        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null}), errors};
+        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify}), errors};
   }
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,checkLabels,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 
@@ -3815,6 +3870,7 @@ async function runParse(){
         onProgress:p=>{
           if(!live()) return;
           if(p.stage==='retry'){ document.getElementById('parseDetail').textContent='AI 服務暫時忙碌，'+Math.round(p.wait/1000)+' 秒後自動重試（第 '+p.attempt+'／'+p.of+' 次）…'; return; }
+          if(p.stage==='roles'){ setParseUI({stage:'整理角色…',pct:9,cancel:true}); return; }
           if(p.stage==='format') setParseUI({stage:'分析劇本格式…',pct:p.done?8:3,cancel:true,detail:p.roles?'找到 '+p.roles+' 個角色':''});
           else setParseUI({stage:'逐行標記台詞（第 '+Math.min(p.done+1,p.total)+'／'+p.total+' 段）',pct:8+Math.round(90*p.done/p.total),cancel:true,
             detail:p.failed?p.failed+' 段自動標記失敗，會改用規則先標並請你檢查':''});

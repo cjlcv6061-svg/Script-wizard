@@ -24,9 +24,39 @@ async function sha256Hex(s) {
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+const MAX_CANDIDATES = 150;
+// 角色清單：1～60 個，每個要有 id；回傳 null＝不合格
+function cleanRoles(roles) {
+  if (!Array.isArray(roles) || !roles.length || roles.length > 60) return null;
+  const out = roles.map(r => ({
+    id: String(r && r.id || '').slice(0, 12),
+    name: String(r && r.name || '').slice(0, 40),
+    aliases: (Array.isArray(r && r.aliases) ? r.aliases : []).slice(0, 12).map(a => String(a).slice(0, 40))
+  }));
+  return out.some(r => !r.id) ? null : out;
+}
+// 候選稱呼分類：candidates:[[稱呼, 出現次數, 例句],…]（本機程式從行首統計出來的），roles 可有可無
+function validateRoles(p) {
+  if (!Array.isArray(p.candidates) || !p.candidates.length) return { error: 'no_candidates' };
+  if (p.candidates.length > MAX_CANDIDATES) return { error: 'too_many_lines' };
+  const candidates = [];
+  for (const x of p.candidates) {
+    if (!Array.isArray(x) || x.length < 2 || typeof x[0] !== 'string' || !x[0].trim() || x[0].length > 24 || !Number.isInteger(x[1]) || x[1] < 0) return { error: 'bad_line' };
+    candidates.push([x[0].trim(), x[1], typeof x[2] === 'string' ? x[2].slice(0, 80) : '']);
+  }
+  const out = { mode: 'roles', candidates };
+  if (p.roles != null && !(Array.isArray(p.roles) && !p.roles.length)) {
+    const roles = cleanRoles(p.roles);
+    if (!roles) return { error: 'bad_roles' };
+    out.roles = roles;
+  }
+  return out;
+}
+
 // 驗證並整理請求內容；不合格回傳錯誤字串
 export function validatePayload(p) {
   if (!p || typeof p !== 'object') return { error: 'bad_body' };
+  if (p.mode === 'roles') return validateRoles(p);
   if (p.mode !== 'format' && p.mode !== 'label') return { error: 'bad_mode' };
   if (!Array.isArray(p.lines) || !p.lines.length) return { error: 'no_lines' };
   if (p.lines.length > MAX_LINES) return { error: 'too_many_lines' };
@@ -37,13 +67,9 @@ export function validatePayload(p) {
   }
   const out = { mode: p.mode, lines };
   if (p.mode === 'label') {
-    if (!Array.isArray(p.roles) || !p.roles.length || p.roles.length > 60) return { error: 'bad_roles' };
-    out.roles = p.roles.map(r => ({
-      id: String(r && r.id || '').slice(0, 12),
-      name: String(r && r.name || '').slice(0, 40),
-      aliases: (Array.isArray(r && r.aliases) ? r.aliases : []).slice(0, 12).map(a => String(a).slice(0, 40))
-    }));
-    if (out.roles.some(r => !r.id)) return { error: 'bad_roles' };
+    const roles = cleanRoles(p.roles);
+    if (!roles) return { error: 'bad_roles' };
+    out.roles = roles;
     const rules = {};
     for (const k of ['speaker_pos', 'direction', 'heading', 'noise', 'notes']) rules[k] = String(p.rules && p.rules[k] || '').slice(0, 200);
     out.rules = rules;
@@ -91,7 +117,7 @@ export default {
       method: 'POST',
       body: JSON.stringify({ ip: ipHash, today, perIp: +env.DAILY_PER_IP || 60, total: +env.DAILY_TOTAL || 600 })
     })).json();
-    const log = (status, extra) => console.log(JSON.stringify({ t: new Date().toISOString(), ip: ipHash, mode: payload.mode, lines: payload.lines.length, status, ...extra }));
+    const log = (status, extra) => console.log(JSON.stringify({ t: new Date().toISOString(), ip: ipHash, mode: payload.mode, lines: (payload.lines || payload.candidates).length, status, ...extra }));
     if (!lim.ok) {
       log(429, { reason: lim.reason });
       return json({ error: 'rate_limited', reason: lim.reason }, 429, { ...H, 'retry-after': String(secondsToUtcMidnight()) });
@@ -146,8 +172,9 @@ function upstreamErrorInfo(j, payload, env) {
   const prov = take(e.metadata && e.metadata.provider_name, 40); if (prov) out.upstream_provider = prov;
   const msg = take(e.message, 160);
   if (msg) {
-    const script = payload.lines.map(l => l[1]).join('\n');
-    let leak = !!(env.OPENROUTER_API_KEY && msg.includes(env.OPENROUTER_API_KEY)) || payload.lines.some(l => l[1].length >= 4 && msg.includes(l[1]));
+    const texts = payload.lines ? payload.lines.map(l => l[1]) : payload.candidates.map(c => c[2]).filter(Boolean);
+    const script = texts.join('\n');
+    let leak = !!(env.OPENROUTER_API_KEY && msg.includes(env.OPENROUTER_API_KEY)) || texts.some(t => t.length >= 4 && msg.includes(t));
     for (let i = 0; !leak && i + 12 <= msg.length; i++) if (script.includes(msg.slice(i, i + 12))) leak = true;
     out.upstream_msg = leak ? '[redacted]' : msg;
   }

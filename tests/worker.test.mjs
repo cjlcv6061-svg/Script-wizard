@@ -137,6 +137,37 @@ const post = (env, body, headers = {}, raw) => worker.fetch(new Request('https:/
     ok(r.status === 503 && l.upstream === 'network' && /timeout/.test(l.upstream_msg) && !logs[0].includes('偉：你好'), '上游逾時：503，日誌記 timeout');
   }
 
+  // ---- 候選稱呼分類（mode:'roles'）----
+  {
+    const env = makeEnv({ DAILY_PER_IP: '1000', DAILY_TOTAL: '1000' });
+    const cands = [['護士', 8, '護士：請借過'], ['SD Cue', 15, 'SD Cue：煙花聲效'], ['楊', 110, '楊：你好']];
+    const v = validatePayload({ mode: 'roles', candidates: cands, roles: [{ id: '楊淑華', name: '楊淑華', aliases: [] }] });
+    eq([v.mode, v.candidates.length, v.roles.length], ['roles', 3, 1], 'roles 模式：合格的請求');
+    eq(validatePayload({ mode: 'roles', candidates: cands }).roles, undefined, 'roles 模式：角色清單可以沒有');
+    eq(validatePayload({ mode: 'roles', candidates: cands, roles: [] }).roles, undefined, 'roles 模式：空的角色清單也可以');
+    for (const [bad, why] of [[{ mode: 'roles' }, 'no_candidates'], [{ mode: 'roles', candidates: [] }, 'no_candidates'], [{ mode: 'roles', candidates: [['', 1, 'x']] }, 'bad_line'], [{ mode: 'roles', candidates: [['甲'.repeat(25), 1, 'x']] }, 'bad_line'], [{ mode: 'roles', candidates: [['甲', 1.5, 'x']] }, 'bad_line'], [{ mode: 'roles', candidates: [['甲', -1, 'x']] }, 'bad_line'], [{ mode: 'roles', candidates: cands, roles: [{ name: 'x' }] }, 'bad_roles'], [{ mode: 'roles', candidates: Array.from({ length: 151 }, (_, i) => ['稱' + i, 2, 'x']) }, 'too_many_lines']])
+      eq(validatePayload(bad).error, why, 'roles 模式：' + why);
+    eq(validatePayload({ mode: 'roles', candidates: Array.from({ length: 150 }, (_, i) => ['稱' + i, 2, 'x']) }).candidates.length, 150, 'roles 模式：剛好 150 個可以');
+    eq(validatePayload({ mode: 'roles', candidates: [['甲', 2, 'x'.repeat(500)]] }).candidates[0][2].length, 80, '例句截到 80 字');
+
+    // 請求內容與輸出過濾
+    upstreamCalls.length = 0;
+    upstreamImpl = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '好的：\n```\n護士|R|\nSD Cue|N|\n楊|A|楊淑華\n不是格式的一行\n楊|X|\n```' } }] }) });
+    const r = await post(env, { mode: 'roles', candidates: cands, roles: [{ id: '楊淑華', name: '楊淑華', aliases: [] }] });
+    const j = await r.json(); const req = JSON.parse(upstreamCalls[0].init.body);
+    eq(j, { ok: true, mode: 'roles', content: '護士|R|\nSD Cue|N|\n楊|A|楊淑華' }, 'roles：只留「稱呼|類別|對應角色」格式、類別限 R／N／A');
+    ok(req.messages[0].content.includes('稱呼分類器') && req.messages[1].content.includes('SD Cue\t15\tSD Cue：煙花聲效') && req.messages[1].content.includes('- 楊淑華：'), 'roles：系統提示詞與候選稱呼表（稱呼、次數、例句）、已知角色都送出');
+    eq([req.max_tokens, 'response_format' in req, req.temperature], [3000, false, 0], 'roles：max_tokens 3000、不要求 JSON、溫度 0');
+    // 日誌只有稱呼數量，不含例句
+    logs.length = 0; await post(env, { mode: 'roles', candidates: [['護士', 8, '極機密例句XYZ']] });
+    const l = JSON.parse(logs[0]);
+    ok(l.mode === 'roles' && l.lines === 1 && l.status === 200 && !logs[0].includes('極機密'), 'roles：日誌記模式與稱呼數量，不含例句');
+    // 上游錯誤訊息若夾帶例句 → [redacted]
+    upstreamImpl = async () => ({ ok: false, status: 400, json: async () => ({ error: { message: 'bad input 極機密例句XYZ這是很長的一句話' } }) });
+    logs.length = 0; await post(env, { mode: 'roles', candidates: [['護士', 8, '極機密例句XYZ這是很長的一句話']] });
+    ok(JSON.parse(logs[0]).upstream_msg === '[redacted]' && !logs[0].includes('極機密'), 'roles：上游錯誤訊息夾帶例句 → [redacted]');
+  }
+
   // ---- 輸出過濾：只回標籤／白名單欄位 ----
   {
     const env = makeEnv({ DAILY_PER_IP: '100', DAILY_TOTAL: '100' });

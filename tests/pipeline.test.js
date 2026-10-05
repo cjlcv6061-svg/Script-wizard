@@ -95,6 +95,41 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   eq(T.parseHeading('SCENE 2').no, 'SCENE2', '英文標題');
 }
 
+
+// ---- 候選稱呼表與分類結果 ----
+{
+  const L = (n, text) => ({ n, text });
+  const mk = arr => arr.map((x, i) => L(i + 1, x));
+  const rl = (...ids) => ids.map(id => ({ id, name: id, aliases: [], gender: 'n' }));
+  const src = [];
+  for (let i = 0; i < 12; i++) src.push('兄：甲' + i, '妹：乙' + i);
+  src.push('護士：請借過', '護士：讓一讓', '護士：小心', 'SD Cue：煙花聲效', 'SD Cue：轉場音樂', '楊：你好', '楊：再見', '路人：喂');       // 路人只出現 1 次
+  const d = T.detectPrefix(mk(src), rl('兄', '妹'));
+  eq(d.candidates.map(c => [c[0], c[1]]), [['護士', 3], ['SD Cue', 2], ['楊', 2]], '候選稱呼：行首出現 ≥2 次、模型沒列出的稱呼，依次數排序（出現 1 次的、已知角色不列）');
+  eq(d.candidates.map(c => c[2]), ['護士：請借過', 'SD Cue：煙花聲效', '楊：你好'], '每個候選附第一次出現的那一行當例句');
+  eq(T.detectPrefix(mk(src), rl('兄', '妹', '護士')).candidates.map(c => c[0]), ['SD Cue', '楊'], '已知角色不再是候選');
+
+  // parseRoleVerdicts
+  const cands = [['護士', 3, ''], ['SD Cue', 2, ''], ['楊', 2, ''], ['路人', 2, '']];
+  const known = [{ id: '楊淑華', name: '楊淑華', aliases: [] }];
+  const v = T.parseRoleVerdicts('好的，結果如下：\n```\n護士|R|\nSD Cue ｜ N ｜\n楊|A|楊淑華\n路人|A|不存在的角色\n陌生人|R|\n護士|N|\n```', cands, known);
+  eq([...v], [['護士', { k: 'R' }], ['SD Cue', { k: 'N' }], ['楊', { k: 'A', to: '楊淑華' }]], '解析：只認候選表裡的稱呼；對應角色不在清單的 A 整筆忽略；重複的以第一筆為準；全形直線與空白容忍');
+  eq(T.parseRoleVerdicts('護士|r|', cands, known).get('護士'), { k: 'R' }, '類別大小寫不拘');
+  eq(T.parseRoleVerdicts('', cands, known).size + T.parseRoleVerdicts('我不知道', cands, known).size, 0, '空白或不是格式的回應：沒有任何判斷');
+
+  // applyRoleVerdicts
+  const base = [{ id: '兄', name: '兄', aliases: [] }, { id: '楊淑華', name: '楊淑華', aliases: [] }, { id: '機', name: '機', aliases: [] }, { id: '護士', name: '護士', aliases: [] }];
+  const r1 = T.applyRoleVerdicts(base, new Map([['新角', { k: 'R' }], ['護士', { k: 'R' }], ['機', { k: 'N' }], ['SD Cue', { k: 'N' }]]), ['護士']);
+  eq(r1.roles.map(r => r.id), ['兄', '楊淑華', '機', '護士', '新角'], 'R：補進清單（已在清單的不重複）；N 只撤銷「自動補進」的角色，模型第一段列的不動');
+  eq(r1.stats, { role: 1, alias: 0, noise: 2 }, '統計');
+  const r2 = T.applyRoleVerdicts(base, new Map([['護士', { k: 'N' }], ['楊', { k: 'A', to: '楊淑華' }], ['楊2', { k: 'A', to: '沒這個人' }]]), ['護士']);
+  eq(r2.roles.map(r => r.id), ['兄', '楊淑華', '機'], 'N 撤銷自動補進的「護士」');
+  eq(r2.roles.find(r => r.id === '楊淑華').aliases, ['楊'], 'A：併成別名；對應角色不存在的忽略');
+  const r3 = T.applyRoleVerdicts([{ id: '兄', name: '兄', aliases: [] }, { id: '楊', name: '楊', aliases: [] }, { id: '楊淑華', name: '楊淑華', aliases: [] }], new Map([['楊', { k: 'A', to: '楊淑華' }]]), ['楊']);
+  eq(r3.roles.map(r => r.id), ['兄', '楊淑華'], 'A：撤銷自動補進的同名角色，改成別名（不會變成兩個角色）');
+  eq(T.applyRoleVerdicts(base, new Map(), []).roles, base, '沒有判斷：維持原狀');
+}
+
 // ---- 切塊 / 取樣 ----
 {
   const mk = k => Array.from({ length: k }, (_, i) => ({ n: i + 1, text: 'x' + i }));
@@ -451,6 +486,56 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     calls = 0; threw = null;
     try { await T.runPipeline({ lines, callApi: async () => { calls++; throw Object.assign(new Error('quota'), { fatal: true, status: 429 }); }, concurrency: 1, retryDelays: [0, 0, 0] }); } catch (e) { threw = e; }
     ok(threw && threw.status === 429 && calls === 1, '本站每日上限（非 retryable）：不重試，立即中止');
+  }
+
+  // 候選稱呼分類（真實 docx 暴露的問題）：次要角色（護士）、簡稱（楊＝楊淑華）、不是角色的標記（SD Cue）。
+  // 模型第一段只列了主要角色；標記步驟的模型只能用清單內的角色，清單外的行行首稱呼它一律標成雜訊。
+  {
+    const gold = [];
+    for (let i = 0; i < 12; i++) gold.push('兄：第' + i + '句台詞內容', '妹：第' + i + '句回應內容');
+    gold.push('護士：請借過一下', '護士：讓一讓好嗎', '護士：小心地上', 'SD Cue：煙花聲效', 'SD Cue：轉場音樂', '楊：你好呀今天', '楊：再見啦明天', '楊：多謝你呀', '楊：好的沒問題');
+    const lines = T.buildLines({ text: gold.join('\n') }).lines;
+    const mk = opts => {
+      const seen = { roles: 0, labelRoles: null };
+      const callApi = async p => {
+        if (p.mode === 'format') return JSON.stringify({ roles: [{ id: '兄', name: '兄' }, { id: '妹', name: '妹' }, { id: '楊淑華', name: '楊淑華' }], rules: { speaker_pos: 'prefix' } });
+        if (p.mode === 'roles') { seen.roles++; if (opts.rolesFail) throw opts.rolesFail; return opts.rolesAnswer || '護士|R|\nSD Cue|N|\n楊|A|楊淑華'; }
+        seen.labelRoles = p.roles.map(r => r.id);
+        return p.lines.map(([n, text]) => {
+          const m = text.match(/^([^：]+)：/); const who = m && m[1];
+          if (who === '兄' || who === '妹') return n + '|S|' + who;
+          if (who === '楊') return n + '|S|' + (p.roles.some(r => r.id === '楊淑華') ? '楊淑華' : 'x');
+          if (who === '護士') return p.roles.some(r => r.id === '護士') ? n + '|S|護士' : n + '|N|';
+          return n + '|N|';
+        }).join('\n');
+      };
+      return { callApi, seen };
+    };
+    const run1 = async opts => { const m = mk(opts); const r = await T.runPipeline({ lines, callApi: m.callApi, concurrency: 1, retryDelays: [0, 0, 0] }); return { r, m }; };
+    const rolesOf = r => r.scenes.flatMap(s => s.lines).filter(l => l.s !== undefined).map(l => l.s);
+    const cnt = a => a.reduce((o, x) => (o[x] = (o[x] || 0) + 1, o), {});
+    // 有分類：護士是角色、SD Cue 不是、楊併入楊淑華
+    const { r, m } = await run1({});
+    eq(m.seen.roles, 1, '候選稱呼分類只多一次請求');
+    eq(cnt(rolesOf(r)), { 兄: 12, 妹: 12, 護士: 3, 楊淑華: 4 }, '護士 3 句成為台詞、楊 4 句併入楊淑華、SD Cue 不是台詞（沒有任何一句消失）');
+    eq(r.roles.map(x => x.id).sort(), ['兄', '妹', '楊淑華', '護士'].sort(), '角色清單：護士補進、楊沒有變成第二個角色、SD Cue 不是角色');
+    eq([r.stats.roleClassify.candidates, r.stats.roleClassify.answered, r.stats.roleClassify.role, r.stats.roleClassify.alias, r.stats.roleClassify.noise], [3, 3, 1, 1, 1], '統計：候選 3 個、回答 3 個；護士（只出現 3 次，低於 ≥5 次的自動門檻）由模型判斷後補進角色、楊併入別名、SD Cue 不是角色');
+    ok(m.seen.labelRoles.includes('護士') && !m.seen.labelRoles.includes('SD Cue'), '送去標記的角色清單包含護士、不含 SD Cue');
+    // 沒有這一步（Worker 還沒更新→400）：照舊，不會讓解析失敗；護士只出現 3 次、低於門檻，仍被標成雜訊
+    const { r: r0 } = await run1({ rolesFail: Object.assign(new Error('bad_mode'), { fatal: true, status: 400 }) });
+    ok(r0.stats.failedChunks === 0 && r0.stats.roleClassify.answered === 0 && !rolesOf(r0).includes('護士'), '分類請求被拒（400）：略過這一步，解析照常完成');
+    // 模型回不出可用的答案：略過；一般錯誤（非 fatal）：重試一次後略過
+    const { r: r1 } = await run1({ rolesAnswer: '我不確定' });
+    ok(r1.stats.roleClassify.answered === 0 && r1.stats.failedChunks === 0, '回應不是格式：略過');
+    const { r: r2, m: m2 } = await run1({ rolesFail: new Error('boom') });
+    ok(r2.stats.roleClassify.answered === 0 && m2.seen.roles === 2, '一般錯誤：試 2 次後略過（' + m2.seen.roles + ' 次）');
+    // 本站每日上限（429）仍然立即中止
+    let threw = null; try { await run1({ rolesFail: Object.assign(new Error('quota'), { fatal: true, status: 429 }) }); } catch (e) { threw = e; }
+    ok(threw && threw.status === 429, '分類請求遇到本站每日上限（429）：中止');
+    // 完美模型的前綴劇本沒有候選 → 完全不多一次請求
+    const v = vs['colon-fw'], ls = T.buildLines({ text: v.text }).lines, mock = makeMock(ls, v.gold, {});
+    await T.runPipeline({ lines: ls, callApi: mock.callApi });
+    eq(mock.calls.roles, 0, '沒有候選稱呼的劇本：不多一次分類請求');
   }
   // 進度回報
   {

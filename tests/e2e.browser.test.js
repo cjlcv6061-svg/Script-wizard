@@ -35,7 +35,10 @@ const mock = http.createServer((req, res) => {
     const sys = body.messages[0].content, user = body.messages[1].content;
     const rows = user.split('\n').map(l => l.match(/^(\d+)\t(.*)$/)).filter(Boolean).map(m => ({ n: +m[1], text: m[2] }));
     let content;
-    if (/格式分析器/.test(sys)) {
+    if (/稱呼分類器/.test(sys)) {                       // 候選稱呼分類：這份劇本的候選（四人、男…）是合說稱呼，不當成新角色（N）
+      const rows = user.split('候選稱呼表（稱呼、出現次數、一行例句）：\n')[1] || '';
+      content = rows.split('\n').map(l => l.match(/^(.+?)\t\d+\t/)).filter(Boolean).map(m => m[1] + '|N|').join('\n');
+    } else if (/格式分析器/.test(sys)) {
       const cnt = new Map();
       for (const l of rows) { const m = l.text.match(/^([^：:（(\s]{1,12})\s*[：:]/); if (m) for (const t of m[1].split(/[、,，/／]/).filter(Boolean)) cnt.set(t, (cnt.get(t) || 0) + 1); }
       content = JSON.stringify({ roles: [...cnt].filter(([, c]) => c >= 3).map(([id]) => ({ id, name: id, aliases: [], gender: 'n' })), rules: { speaker_pos: 'prefix' } });
@@ -65,7 +68,7 @@ const listen = (srv, port) => new Promise(r => srv.listen(port || 0, '127.0.0.1'
   const wr = spawn(wranglerBin, ['dev', '--local', '--port', String(WPORT), '--persist-to', persist,
     '--var', 'OPENROUTER_API_KEY:sk-e2e', '--var', 'MODEL:vendor/e2e', '--var', 'ALLOW_LOCALHOST:true',
     '--var', 'UPSTREAM_URL:http://127.0.0.1:' + mockPort + '/api/v1/chat/completions',
-    '--var', 'DAILY_PER_IP:20', '--var', 'DAILY_TOTAL:1000'], { cwd: path.join(ROOT, 'worker'), detached: true, env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' } });
+    '--var', 'DAILY_PER_IP:30', '--var', 'DAILY_TOTAL:1000'], { cwd: path.join(ROOT, 'worker'), detached: true, env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' } });
   let wlog = '';
   wr.stdout.on('data', d => wlog += d); wr.stderr.on('data', d => wlog += d);
   const kill = () => { try { process.kill(-wr.pid, 'SIGKILL'); } catch (e) {} };
@@ -157,7 +160,7 @@ const listen = (srv, port) => new Promise(r => srv.listen(port || 0, '127.0.0.1'
   ok(upstream.calls.length === calls1, '相同內容不重複呼叫（仍是 ' + upstream.calls.length + ' 次）');
   ok((await page.evaluate(() => Store.all('scripts'))).length === 2, '快取命中仍建立新劇本');
 
-  // ---- 4. 超過每日上限 → 429 提示（DAILY_PER_IP=20；失敗的呼叫會重試 3 次，前面兩次失敗各用 4，再加完整流程 6 = 14；不同內容需 1+7 次，第 21 次起 429）----
+  // ---- 4. 超過每日上限 → 429 提示（DAILY_PER_IP=30；失敗的呼叫會重試 3 次，前面兩次失敗各用 4，再加完整流程（含候選稱呼分類）約 12；之後再解析不同內容會在途中超過 30 次而 429）----
   await page.click('#rvBack');   // 此時停在校正頁，用「‹ 我的劇本」回首頁
   await page.waitForFunction(() => document.body.classList.contains('home-mode'));
   await paste(V['wrapped'].text, '會超額');
