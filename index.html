@@ -733,6 +733,21 @@
   .home-btn:hover{border-color:var(--vermilion);color:var(--vermilion);}
   .land-back{background:none;border:none;color:rgba(243,236,224,.7);font:inherit;letter-spacing:inherit;cursor:pointer;padding:0;}
   .land-back:hover{color:#f6ede0;}
+  /* ---------- 新增劇本 ---------- */
+  #addView{display:none;}
+  body.add-mode #addView{display:block;}
+  body.add-mode{min-height:100vh;}
+  body.add-mode > header, body.add-mode > main, body.add-mode > .dock, body.add-mode > .loop-bar{display:none !important;}
+  .back-link{background:none;border:none;color:var(--muted);font:inherit;font-size:.86rem;cursor:pointer;padding:0 0 14px;}
+  .back-link:hover{color:var(--ink);}
+  .add-box{border:1px dashed var(--line);border-radius:10px;padding:16px;margin-bottom:16px;}
+  .add-box h3{margin:0 0 8px;font-size:.95rem;}
+  .add-field{width:100%;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;padding:10px 12px;}
+  textarea.add-field{min-height:140px;resize:vertical;line-height:1.6;}
+  .add-status{font-size:.86rem;color:var(--muted);min-height:1.4em;margin:6px 0;}
+  .add-status.bad{color:var(--vermilion);}
+  .add-info{font-size:.86rem;color:var(--gold);margin:8px 0 6px;}
+  .add-pre{margin:0 0 14px;max-height:240px;overflow:auto;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-family:"Noto Sans Mono",monospace;font-size:.74rem;line-height:1.6;white-space:pre-wrap;word-break:break-all;}
 </style>
 </head>
 <body>
@@ -743,11 +758,36 @@
     <p class="home-sub">上傳劇本，自動整理成可背誦的台詞本。劇本只存在這部裝置的瀏覽器裡。</p>
     <div class="home-memwarn" id="homeMemWarn">此瀏覽器無法持久儲存資料（可能是無痕模式）。關閉頁面後劇本會消失，請務必用「匯出」備份。</div>
     <div class="home-actions">
+      <button class="ghost-btn primary" id="homeAddBtn">新增劇本</button>
       <button class="ghost-btn" id="homeImportBtn">匯入 JSON</button>
       <input type="file" id="homeImportFile" accept=".json,application/json" style="display:none">
     </div>
     <div id="homeList"></div>
     <div class="home-note">清除瀏覽器資料會讓劇本與成績消失。換裝置或備份請用每份劇本的「匯出」。</div>
+  </div>
+</div>
+<!-- 新增劇本 -->
+<div id="addView">
+  <div class="home-wrap">
+    <button class="back-link" id="addBack">‹ 我的劇本</button>
+    <h1 class="home-title">新增<span class="em">劇本</span></h1>
+    <p class="home-sub">支援 Word（.docx）、文字型 PDF、純文字，或直接貼上。掃描檔（圖片 PDF）暫不支援。</p>
+    <div class="add-box">
+      <h3>選擇檔案</h3>
+      <button class="ghost-btn" id="addPickBtn">選擇 docx／PDF／txt</button>
+      <input type="file" id="addFile" accept=".docx,.pdf,.txt,.md,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="display:none">
+    </div>
+    <div class="add-box">
+      <h3>或貼上文字</h3>
+      <textarea class="add-field" id="addPaste" placeholder="把整份劇本貼在這裡"></textarea>
+    </div>
+    <div class="add-box">
+      <h3>劇名</h3>
+      <input class="add-field" id="addTitle" type="text" maxlength="60" placeholder="可留空（上傳檔案時自動取檔名）">
+    </div>
+    <div class="add-status" id="addStatus" role="status"></div>
+    <div id="addPreview"></div>
+    <div class="home-actions"><button class="ghost-btn primary" id="addNext" disabled>下一步</button></div>
   </div>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -1101,6 +1141,191 @@ async function loadStats(role){
   }catch(e){ return blank; }
 }
 
+
+/* ============================================================
+   解析器核心（純函式，無 DOM；評測腳本與測試會直接抽出這一段執行）
+   PARSER-CORE:BEGIN
+   ============================================================ */
+const TSP=(function(){
+  // ---------- 前處理：取文字 → 編號行 ----------
+  const MAX_LINES=20000;
+
+  // 頁碼樣式：「12」「- 12 -」「第3頁」「第3頁／共10頁」「Page 3 of 10」「3 / 10」
+  const PAGENO_BARE=/^[-–—~\s]*[0-9０-９]{1,4}[-–—~\s]*$/;
+  const PAGENO_FORMS=[
+    /^[-–—~\s]*第\s*[0-9０-９一二三四五六七八九十百零〇]{1,5}\s*頁(\s*[\/／]\s*共?\s*[0-9０-９一二三四五六七八九十百]+\s*頁?)?[-–—~\s]*$/,
+    /^(page|p\.?)\s*[0-9]{1,4}(\s*(of|\/)\s*[0-9]{1,4})?$/i,
+    /^[0-9０-９]{1,4}\s*[\/／]\s*[0-9０-９]{1,4}$/,
+    /^[-–—~]\s*[0-9０-９]{1,4}\s*[-–—~]$/                  // - 12 -
+  ];
+  function isPageNumberLine(s, includeBare){
+    const t=(s||'').trim();
+    if(!t) return false;
+    if(PAGENO_FORMS.some(re=>re.test(t))) return true;
+    return !!includeBare && PAGENO_BARE.test(t);
+  }
+  // 重複偵測用的「形狀」：數字一律換成 #，去空白，所以「第3頁」「第4頁」同形
+  const shapeKey=s=>(s||'').replace(/[0-9０-９]+/g,'#').replace(/\s+/g,'');
+  // 看起來是台詞的行（角色名＋冒號）：不當頁眉頁尾刪除
+  const DIALOGUE_LIKE=/^[^\s：:（(]{1,10}[（(]?[^）)：:]{0,12}[）)]?[：:]\S/;
+
+  // 把一頁的 pdf.js 文字項目（含座標）組成行。items: [{str, transform:[a,b,c,d,x,y], width, height}]
+  function itemsToLines(items){
+    const its=items.filter(it=>it && typeof it.str==='string' && it.transform)
+      .map(it=>({str:it.str, x:it.transform[4], y:it.transform[5], fs:Math.abs(it.transform[0])||it.height||10, w:it.width||0}));
+    its.sort((a,b)=> (b.y-a.y) || (a.x-b.x));
+    const rows=[];
+    for(const it of its){
+      const last=rows[rows.length-1];
+      const tol=Math.max(2,it.fs*0.45);
+      if(last && Math.abs(last.y-it.y)<=tol){ last.items.push(it); }
+      else rows.push({y:it.y, items:[it]});
+    }
+    const out=[];
+    for(const r of rows){
+      r.items.sort((a,b)=>a.x-b.x);
+      let s='', prev=null;
+      for(const it of r.items){
+        if(prev){
+          const gap=it.x-(prev.x+prev.w);
+          const needSpace=gap>prev.fs*0.3 && !/\s$/.test(s) && !/^\s/.test(it.str);
+          if(needSpace) s+=' ';
+        }
+        s+=it.str; prev=it;
+      }
+      s=s.replace(/\s+$/,'').replace(/^\s+/,'');
+      if(s) out.push(s);
+    }
+    return out;
+  }
+
+  // 去 PDF 頁眉頁尾與頁碼。pages: string[][]（每頁的行）。
+  // 回傳 {pages, removed:[{page,text,reason}]}；拿不準的留給後面的 LLM 標為雜訊。
+  function cleanPdfPages(pages, opts){
+    const edge=(opts&&opts.edge)||3;
+    const removed=[];
+    const np=pages.length;
+    // 每頁邊緣（頭 edge 行＋尾 edge 行）的位置
+    const edgeIdx=pages.map(p=>{
+      const set=new Set();
+      for(let i=0;i<Math.min(edge,p.length);i++) set.add(i);
+      for(let i=Math.max(0,p.length-edge);i<p.length;i++) set.add(i);
+      return set;
+    });
+    // 形狀在多少頁的邊緣出現（每頁只算一次）
+    const count=new Map();
+    pages.forEach((p,pi)=>{
+      const seen=new Set();
+      edgeIdx[pi].forEach(i=>seen.add(shapeKey(p[i])));
+      seen.forEach(k=>count.set(k,(count.get(k)||0)+1));
+    });
+    const need=Math.max(2,Math.ceil(np*0.3));
+    const cleaned=pages.map((p,pi)=>{
+      const keep=[];
+      p.forEach((line,i)=>{
+        if(edgeIdx[pi].has(i)){
+          if(isPageNumberLine(line,false)){ removed.push({page:pi+1,text:line,reason:'pageno'}); return; }
+          if(np>=2 && (count.get(shapeKey(line))||0)>=need && !DIALOGUE_LIKE.test(line)){
+            removed.push({page:pi+1,text:line,reason:isPageNumberLine(line,true)?'pageno':'repeat'}); return;
+          }
+        }
+        keep.push(line);
+      });
+      return keep;
+    });
+    // 內文中的連號頁碼
+    const flat=[]; cleaned.forEach((p,pi)=>p.forEach((l,i)=>flat.push({pi,i,l})));
+    const drop=sequentialPageNumberIdx(flat.map(x=>x.l));
+    if(drop.size){
+      const dead=new Set([...drop].map(k=>flat[k].pi+':'+flat[k].i));
+      const out=cleaned.map((p,pi)=>p.filter((l,i)=>{
+        if(dead.has(pi+':'+i)){ removed.push({page:pi+1,text:l,reason:'pageno-seq'}); return false; }
+        return true;
+      }));
+      return {pages:out, removed};
+    }
+    return {pages:cleaned, removed};
+  }
+
+  // 內文中夾雜的連號頁碼（如複製貼上自 PDF）：同一形狀（「- # -」「第#頁」…）出現 ≥3 次，
+  // 且數字大致逐次遞增，就視為頁碼，不論位置一律移除。純數字行太容易是場次編號，不在此列。
+  function sequentialPageNumberIdx(lines){
+    const groups=new Map();
+    lines.forEach((l,i)=>{
+      const t=(l||'').trim();
+      if(!PAGENO_FORMS.some(re=>re.test(t))) return;
+      const m=t.replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)).match(/[0-9]+/);
+      if(!m) return;
+      const k=shapeKey(t);
+      if(!groups.has(k)) groups.set(k,[]);
+      groups.get(k).push({i,v:+m[0]});
+    });
+    const drop=new Set();
+    groups.forEach(g=>{
+      if(g.length<3) return;
+      let up=0;
+      for(let j=1;j<g.length;j++){ const d=g[j].v-g[j-1].v; if(d>=1&&d<=3) up++; }
+      if(up/(g.length-1)>=0.7) g.forEach(x=>drop.add(x.i));
+    });
+    return drop;
+  }
+  // 抽不出文字（掃描檔）？
+  function looksScanned(pages){
+    const chars=pages.reduce((n,p)=>n+p.reduce((m,l)=>m+l.replace(/\s/g,'').length,0),0);
+    return chars<30 || chars/Math.max(1,pages.length)<12;
+  }
+
+  // 殘留頁碼行數（量測用）：獨立成行的頁碼樣式，含純數字
+  function residualPageNumbers(lines){
+    return lines.filter(l=>isPageNumberLine(typeof l==='string'?l:l.text,true)).length;
+  }
+
+  // 文字 → 編號行。空行略過；n 從 1 起編，src 為原文字中的實體行號（對應表）。
+  function textToLines(text){
+    const raw=String(text||'').replace(/^\uFEFF/,'').split(/\r\n|\r|\n|\u2028|\u2029/);
+    const lines=[];
+    raw.forEach((l,i)=>{
+      const t=l.replace(/\u0000/g,'').replace(/^[\s　]+|[\s　]+$/g,'');
+      if(t) lines.push({n:lines.length+1, text:t, src:i+1});
+    });
+    return lines;
+  }
+  // 頁面 → 編號行（附頁碼）
+  function pagesToLines(pages){
+    const lines=[];
+    pages.forEach((p,pi)=>p.forEach((l,i)=>{
+      const t=l.replace(/\u0000/g,'').replace(/^[\s　]+|[\s　]+$/g,'');
+      if(t) lines.push({n:lines.length+1, text:t, src:lines.length+1, page:pi+1});
+    }));
+    return lines;
+  }
+
+  // 統一入口。input: {text} 或 {pages}（pages 為每頁的行；會先清頁眉頁尾）
+  function buildLines(input){
+    let lines, removed=[], scanned=false;
+    if(input.pages){
+      scanned=looksScanned(input.pages);
+      const c=cleanPdfPages(input.pages);
+      removed=c.removed;
+      lines=pagesToLines(c.pages);
+    }else{
+      lines=textToLines(input.text);
+      const drop=sequentialPageNumberIdx(lines.map(l=>l.text));
+      if(drop.size){
+        removed=lines.filter((l,i)=>drop.has(i)).map(l=>({page:0,text:l.text,reason:'pageno-seq'}));
+        lines=lines.filter((l,i)=>!drop.has(i)).map((l,i)=>Object.assign({},l,{n:i+1}));   // 重新編號，src 保留
+      }
+    }
+    if(lines.length>MAX_LINES) throw new Error('劇本太長（超過 '+MAX_LINES+' 行），請分段上傳');
+    return {lines, removed, scanned, stats:{lines:lines.length, removed:removed.length, residualPageNo:residualPageNumbers(lines)}};
+  }
+
+  // 傳給 Worker 的格式：[[n,"text"],…]
+  const toWire=lines=>lines.map(l=>[l.n,l.text]);
+
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+})();
+/* PARSER-CORE:END */
 
 /* ============================================================
    渲染與互動
@@ -2389,7 +2614,7 @@ async function showHome(){
   stopSpeak();
   CUR=null;
   roleOverlay.style.display='none'; document.body.classList.remove('overlay-open');
-  document.body.classList.add('home-mode');
+  showView('home');
   document.title='台詞小精靈';
   window.scrollTo(0,0);
   await renderHome();
@@ -2404,7 +2629,7 @@ async function renderHome(){
   if(!list.length){
     const e=document.createElement('div');
     e.className='home-empty';
-    e.textContent='還沒有劇本。按上面的「匯入 JSON」載入劇本檔。';
+    e.textContent='還沒有劇本。按「新增劇本」上傳或貼上，或「匯入 JSON」載入備份。';
     homeList.appendChild(e);
     return;
   }
@@ -2450,7 +2675,7 @@ async function openScript(id){
   hiddenChars = new Set(myRole?[myRole]:[]);
   STATS = await loadStats(myRole);
   current=0; allRevealed=false; syncToggleAll();
-  document.body.classList.remove('home-mode');
+  showView(null);
   document.title='《'+rec.title+'》— 台詞小精靈';
   document.getElementById('scriptTitle').textContent=rec.title;
   document.getElementById('landTitle').textContent=rec.title;
@@ -2533,6 +2758,132 @@ document.getElementById('homeImportFile').onchange=async(e)=>{
 };
 document.getElementById('homeBtn').onclick=()=>showHome();
 document.getElementById('landHome').onclick=()=>showHome();
+
+/* ============================================================
+   新增劇本：取文字（docx／PDF 文字層／貼上）→ 編號行
+   ============================================================ */
+const VIEWS=['home','add','review'];
+function showView(name){ VIEWS.forEach(v=>document.body.classList.toggle(v+'-mode', v===name)); }
+
+const libLoaded={};
+function loadLib(src){
+  if(!libLoaded[src]) libLoaded[src]=new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    s.src=src; s.onload=()=>res(); s.onerror=()=>{ delete libLoaded[src]; rej(new Error('無法載入元件 '+src)); };
+    document.head.appendChild(s);
+  });
+  return libLoaded[src];
+}
+function readFileBuffer(file){
+  if(file.arrayBuffer) return file.arrayBuffer();
+  return new Promise((res,rej)=>{
+    const fr=new FileReader();
+    fr.onload=()=>res(fr.result); fr.onerror=()=>rej(fr.error||new Error('讀檔失敗'));
+    fr.readAsArrayBuffer(file);
+  });
+}
+async function extractDocx(buf){
+  await loadLib('vendor/mammoth.browser.min.js');
+  const r=await window.mammoth.extractRawText({arrayBuffer:buf});
+  return r.value;
+}
+async function extractPdf(buf){
+  await loadLib('vendor/pdf.min.js');
+  const lib=window.pdfjsLib;
+  lib.GlobalWorkerOptions.workerSrc='vendor/pdf.worker.min.js';
+  const doc=await lib.getDocument({data:new Uint8Array(buf), isEvalSupported:false}).promise;
+  const pages=[];
+  for(let p=1;p<=doc.numPages;p++){
+    const page=await doc.getPage(p);
+    const tc=await page.getTextContent();
+    pages.push(TSP.itemsToLines(tc.items));
+  }
+  return pages;
+}
+function decodeText(buf){
+  const u=new Uint8Array(buf);
+  if(u[0]===0xFF&&u[1]===0xFE) return new TextDecoder('utf-16le').decode(u);
+  if(u[0]===0xFE&&u[1]===0xFF) return new TextDecoder('utf-16be').decode(u);
+  try{ return new TextDecoder('utf-8',{fatal:true}).decode(u); }
+  catch(e){
+    for(const enc of ['big5','gbk']){ try{ return new TextDecoder(enc).decode(u); }catch(_){} }
+    return new TextDecoder('utf-8').decode(u);
+  }
+}
+// 依副檔名＋檔頭判斷格式。回傳 {kind:'text'|'docx'|'pdf', text?, pages?}
+async function extractFromFile(file){
+  const ext=((file.name||'').match(/\.([^.]+)$/)||[])[1];
+  const e=(ext||'').toLowerCase();
+  if(e==='doc') throw new Error('不支援舊版 .doc，請在 Word 另存成 .docx 再上傳');
+  const buf=await readFileBuffer(file);
+  const h=new Uint8Array(buf.slice(0,5));
+  const isPdf=h[0]===0x25&&h[1]===0x50&&h[2]===0x44&&h[3]===0x46;       // %PDF
+  const isZip=h[0]===0x50&&h[1]===0x4B;                                  // PK
+  if(e==='pdf'||isPdf) return {kind:'pdf', pages:await extractPdf(buf)};
+  if(e==='docx'||isZip) return {kind:'docx', text:await extractDocx(buf)};
+  return {kind:'text', text:decodeText(buf)};
+}
+
+// 目前準備好的來源（供解析用）
+let SRC=null;   // {kind, title, lines, removed, hash}
+const addTitle=document.getElementById('addTitle');
+const addStatus=document.getElementById('addStatus');
+const addPreview=document.getElementById('addPreview');
+const addNext=document.getElementById('addNext');
+function setAddStatus(msg, bad){ addStatus.textContent=msg||''; addStatus.classList.toggle('bad',!!bad); }
+
+async function prepareSource(input, defaultTitle){
+  // input: {kind, text} 或 {kind, pages}
+  const r=TSP.buildLines(input.pages?{pages:input.pages}:{text:input.text});
+  if(input.pages && r.scanned) throw new Error('這是掃描檔（抽不出文字），暫不支援。請改用 Word 檔，或把文字複製貼上。');
+  if(!r.lines.length) throw new Error('沒有讀到任何文字');
+  const hash=await sha256Hex(r.lines.map(l=>l.text).join('\n'));
+  SRC={kind:input.kind, title:defaultTitle||'', lines:r.lines, removed:r.removed, hash, stats:r.stats};
+  return SRC;
+}
+function renderSourcePreview(){
+  addPreview.innerHTML='';
+  if(!SRC){ addNext.disabled=true; return; }
+  const info=document.createElement('div'); info.className='add-info';
+  info.textContent='讀到 '+SRC.lines.length+' 行文字'+(SRC.removed.length?'；已自動移除 '+SRC.removed.length+' 行頁眉／頁碼':'');
+  addPreview.appendChild(info);
+  const pre=document.createElement('pre'); pre.className='add-pre';
+  pre.textContent=SRC.lines.slice(0,40).map(l=>'L'+l.n+'  '+l.text).join('\n')+(SRC.lines.length>40?'\n…':'');
+  addPreview.appendChild(pre);
+  addNext.disabled=false;
+}
+async function handleAddFile(file){
+  setAddStatus('讀取中…'); SRC=null; renderSourcePreview();
+  try{
+    const ex=await extractFromFile(file);
+    const base=(file.name||'').replace(/\.[^.]*$/,'');
+    await prepareSource(ex, base);
+    if(!addTitle.value.trim()) addTitle.value=base;
+    setAddStatus('');
+    renderSourcePreview();
+  }catch(err){ setAddStatus(err&&err.message||String(err), true); }
+}
+async function handleAddPaste(){
+  const text=document.getElementById('addPaste').value;
+  if(!text.trim()){ SRC=null; renderSourcePreview(); setAddStatus(''); return; }
+  try{ await prepareSource({kind:'text',text}, ''); setAddStatus(''); renderSourcePreview(); }
+  catch(err){ setAddStatus(err&&err.message||String(err), true); }
+}
+function showAdd(){
+  stopSpeak(); CUR=null;
+  roleOverlay.style.display='none'; document.body.classList.remove('overlay-open');
+  showView('add');
+  SRC=null; addTitle.value=''; document.getElementById('addPaste').value=''; document.getElementById('addFile').value='';
+  setAddStatus(''); renderSourcePreview();
+  document.title='新增劇本 — 台詞小精靈';
+  window.scrollTo(0,0);
+}
+document.getElementById('homeAddBtn').onclick=showAdd;
+document.getElementById('addBack').onclick=()=>showHome();
+document.getElementById('addPickBtn').onclick=()=>document.getElementById('addFile').click();
+document.getElementById('addFile').onchange=(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) handleAddFile(f); };
+let addPasteTimer=null;
+document.getElementById('addPaste').addEventListener('input',()=>{ clearTimeout(addPasteTimer); addPasteTimer=setTimeout(handleAddPaste,250); });
 
 // ===== 啟動 =====
 (async function boot(){

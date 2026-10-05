@@ -4,10 +4,12 @@
   "description": "台詞小精靈（通用版）— 單檔前端、Worker、評測腳本",
   "scripts": {
     "check": "node tests/check-syntax.js",
-    "test": "node tests/check-syntax.js && node tests/storage.test.js && node tests/legacy-compare.test.js"
+    "fixtures": "node eval/synth.js eval/out/synth && python3 eval/build_docs.py eval/out/synth eval/out/docs",
+    "test": "node tests/check-syntax.js && node tests/parser.test.js && node tests/storage.test.js && node tests/legacy-compare.test.js && node tests/extract.browser.test.js"
   },
   "devDependencies": {
     "fake-indexeddb": "^6.0.0",
-    "jsdom": "^26.0.0"
+    "jsdom": "^26.0.0",
+    "playwright-core": "^1.49.0"
   }
 }

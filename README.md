@@ -23,3 +23,4 @@ python3 -m http.server 8000   # 本機預覽 http://localhost:8000/
 ## 進度
 
 - [x] 步驟 1：Schema 與載入層（IndexedDB、動態角色、移除東京地圖）
+- [x] 步驟 2：本機解析器（docx＝mammoth、PDF＝pdf.js 文字層、貼上；前處理與頁眉頁尾清理）
