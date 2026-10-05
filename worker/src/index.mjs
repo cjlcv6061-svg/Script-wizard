@@ -115,8 +115,9 @@ export default {
     }
     // 供應商全數失敗、額度用盡、被限流…一律回 503；不會也不可能路由到清單外（請求帶 provider.only）
     if (!upstream.ok) {
-      log(503, { upstream: upstream.status });
-      return json({ error: 'service_unavailable' }, 503, H);
+      log(503, { upstream: upstream.status, ...upstreamErrorInfo(await readJsonSafe(upstream), payload, env) });
+      // 429＝OpenRouter／上游供應商限流（免費額度、共用端點忙碌…），與本站的每日上限無關；前端據此顯示不同的提示
+      return json({ error: upstream.status === 429 ? 'upstream_rate_limited' : 'service_unavailable' }, 503, H);
     }
     let content;
     try {
@@ -131,6 +132,27 @@ export default {
     return json({ ok: true, mode: payload.mode, content }, 200, H);
   }
 };
+
+// 上游失敗時才記錄原因，供站長診斷（429 是額度還是上游限流、404 是模型或供應商不對…）。
+// 只取 error.code／供應商名稱／error.message，並截短；訊息裡若出現本次請求的劇本內容或 API key，整段丟掉。
+async function readJsonSafe(res) {
+  try { return await Promise.race([res.json(), new Promise(r => setTimeout(() => r(null), 3000))]); } catch (e) { return null; }
+}
+function upstreamErrorInfo(j, payload, env) {
+  const e = j && typeof j === 'object' ? (j.error && typeof j.error === 'object' ? j.error : { message: j.error }) : {};
+  const take = (v, n) => (typeof v === 'string' || typeof v === 'number') ? String(v).replace(/\s+/g, ' ').trim().slice(0, n) : '';
+  const out = {};
+  const code = take(e.code, 40); if (code) out.upstream_code = code;
+  const prov = take(e.metadata && e.metadata.provider_name, 40); if (prov) out.upstream_provider = prov;
+  const msg = take(e.message, 160);
+  if (msg) {
+    const script = payload.lines.map(l => l[1]).join('\n');
+    let leak = !!(env.OPENROUTER_API_KEY && msg.includes(env.OPENROUTER_API_KEY)) || payload.lines.some(l => l[1].length >= 4 && msg.includes(l[1]));
+    for (let i = 0; !leak && i + 12 <= msg.length; i++) if (script.includes(msg.slice(i, i + 12))) leak = true;
+    out.upstream_msg = leak ? '[redacted]' : msg;
+  }
+  return out;
+}
 
 function configured(env) {
   return !!(env.OPENROUTER_API_KEY && env.MODEL && !/^REPLACE_ME/.test(env.MODEL) && env.LIMITER);

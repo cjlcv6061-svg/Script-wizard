@@ -28,10 +28,10 @@ const ok = (c, m) => { assert(c, m); n++; };
 const upstream = { calls: [], fail: false };
 const mock = http.createServer((req, res) => {
   let b = ''; req.on('data', d => b += d); req.on('end', () => {
-    if (req.url === '/__fail') { upstream.fail = req.method === 'POST'; res.end('ok'); return; }
+    if (req.url.startsWith('/__fail')) { upstream.fail = req.method === 'POST' ? (+new URL(req.url, 'http://x').searchParams.get('status') || 500) : 0; res.end('ok'); return; }
     const body = JSON.parse(b);
     upstream.calls.push(body);
-    if (upstream.fail) { res.writeHead(500); return res.end('{}'); }
+    if (upstream.fail) { res.writeHead(upstream.fail); return res.end('{"error":{"code":' + upstream.fail + ',"message":"upstream failed"}}'); }
     const sys = body.messages[0].content, user = body.messages[1].content;
     const rows = user.split('\n').map(l => l.match(/^(\d+)\t(.*)$/)).filter(Boolean).map(m => ({ n: +m[1], text: m[2] }));
     let content;
@@ -106,6 +106,12 @@ const listen = (srv, port) => new Promise(r => srv.listen(port || 0, '127.0.0.1'
   ok((await page.evaluate(() => Store.all('scripts'))).length === 0, '失敗不留下劇本');
   await page.click('#parseBack');
   ok(await page.evaluate(() => document.body.classList.contains('add-mode')), '失敗後可返回');
+  // 上游 429（免費額度／供應商限流）→ 與一般 503 不同的明確提示
+  await fetch(`http://127.0.0.1:${mockPort}/__fail?status=429`, { method: 'POST' });
+  await page.click('#addNext');
+  await page.waitForFunction(() => document.getElementById('parseErr').style.display === 'block', null, { timeout: 60000 });
+  ok(/被限流/.test(await page.textContent('#parseErr')) && !/服務暫時無法使用/.test(await page.textContent('#parseErr')), '上游 429 → 顯示「AI 模型服務目前被限流」');
+  await page.click('#parseBack');
   await fetch(`http://127.0.0.1:${mockPort}/__fail`, { method: 'DELETE' });
   upstream.calls.length = 0;
 

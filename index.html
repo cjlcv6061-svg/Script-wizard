@@ -3654,7 +3654,7 @@ async function workerCall(payload){
   if(PARSE.cancelled) throw fatalErr('已取消');
   let body=null; try{ body=await res.json(); }catch(e){}
   if(res.status===429) throw fatalErr(body&&body.reason==='global'?'今天全站的解析次數已用完，請明天再試':'你今天的解析次數已用完（每人每日有上限），請明天再試',429);
-  if(res.status===503) throw fatalErr('服務暫時無法使用，請稍後再試',503);
+  if(res.status===503) throw fatalErr(body&&body.error==='upstream_rate_limited'?'AI 模型服務目前被限流（免費額度用完或供應商忙碌），請稍後再試':'服務暫時無法使用，請稍後再試',503);
   if(res.status===502) throw new Error('模型回應格式不正確');
   if(res.status===413) throw fatalErr('劇本片段過大，無法解析',413);
   if(res.status===403) throw fatalErr('解析服務拒絕了這個來源（網站網址與 Worker 的 ALLOWED_ORIGIN 不符）',403);

@@ -133,9 +133,46 @@ const post = (env, body, headers = {}, raw) => worker.fetch(new Request('https:/
     for (const impl of [async () => ({ ok: false, status: 503, json: async () => ({}) }), async () => ({ ok: false, status: 404, json: async () => ({ error: 'No allowed providers' }) }), async () => ({ ok: false, status: 429, json: async () => ({}) }), async () => { throw new Error('net'); }]) {
       upstreamImpl = impl; upstreamCalls.length = 0;
       const r = await post(env, labelBody());
-      ok(r.status === 503 && (await r.json()).error === 'service_unavailable', '上游失敗回 503');
+      const want = impl.toString().includes('429') ? 'upstream_rate_limited' : 'service_unavailable';
+      ok(r.status === 503 && (await r.json()).error === want, '上游失敗回 503（' + want + '）');
       ok(upstreamCalls.length === 1 && upstreamCalls.every(c => c.url.startsWith('https://openrouter.ai/')), '只打一次、且只打 OpenRouter（不自行改路由）');
     }
+  }
+
+  // ---- 上游失敗的原因進日誌（診斷用），但不洩漏劇本內容 ----
+  {
+    const env = makeEnv({ DAILY_PER_IP: '100', DAILY_TOTAL: '100' });
+    const fail = (status, body) => { upstreamImpl = async () => ({ ok: false, status, json: async () => { if (body instanceof Error) throw body; return body; } }); };
+    const secret = '極機密劇本台詞XYZ這一段超過十二個字元';
+    const run = async (lines = [[1, secret]]) => { logs.length = 0; const r = await post(env, { ...labelBody(), lines }, { 'cf-connecting-ip': '203.0.113.77' }); return { r, l: JSON.parse(logs[0]), raw: logs[0] }; };
+
+    fail(429, { error: { code: 429, message: 'Rate limit exceeded: free-models-per-day.\n Add credits', metadata: { provider_name: 'NVIDIA' } } });
+    let { r, l, raw } = await run();
+    ok(r.status === 503 && (await r.json()).error === 'upstream_rate_limited', '上游 429 → 503 upstream_rate_limited');
+    eq([l.status, l.upstream, l.upstream_code, l.upstream_provider], [503, 429, '429', 'NVIDIA'], '日誌記上游狀態碼、錯誤碼、供應商');
+    eq(l.upstream_msg, 'Rate limit exceeded: free-models-per-day. Add credits', '日誌記上游錯誤訊息（空白折疊）');
+    ok(!raw.includes('極機密') && !raw.includes('203.0.113.77'), '仍不含劇本內容與原始 IP');
+
+    fail(404, { error: { message: 'No endpoints found matching your data policy', code: 404 } });
+    ({ l } = await run()); eq([l.upstream, l.upstream_msg], [404, 'No endpoints found matching your data policy'], '404：原因可見');
+    fail(404, { error: 'No allowed providers' });
+    ({ l } = await run()); eq(l.upstream_msg, 'No allowed providers', 'error 是字串也能記');
+    fail(500, { error: { message: 'x'.repeat(500) } });
+    ({ l } = await run()); eq(l.upstream_msg.length, 160, '訊息截到 160 字');
+
+    // 訊息裡出現劇本內容／API key：整段丟掉
+    fail(400, { error: { message: 'Invalid input: ' + secret } });
+    ({ l, raw } = await run()); ok(l.upstream_msg === '[redacted]' && !raw.includes('極機密'), '訊息夾帶整行劇本 → [redacted]');
+    fail(400, { error: { message: 'bad: ' + secret.slice(3, 20) } });
+    ({ l, raw } = await run()); ok(l.upstream_msg === '[redacted]' && !raw.includes('台詞XYZ'), '訊息夾帶劇本片段（≥12 字）→ [redacted]');
+    fail(401, { error: { message: 'Invalid key sk-test-SECRET' } });
+    ({ l, raw } = await run()); ok(l.upstream_msg === '[redacted]' && !raw.includes('sk-test-SECRET'), '訊息夾帶 API key → [redacted]');
+    // 短行（≥4 字）整行出現在訊息裡也算洩漏
+    fail(400, { error: { message: 'bad 偉：你好呀 here' } });
+    ({ l } = await run([[1, '偉：你好呀']])); eq(l.upstream_msg, '[redacted]', '短台詞整行出現 → [redacted]');
+    // 非 JSON 或讀取失敗：照樣 503，只是沒有原因
+    fail(502, new Error('not json'));
+    ({ r, l } = await run()); ok(r.status === 503 && l.upstream === 502 && !('upstream_msg' in l), '上游回非 JSON → 仍回 503，日誌只有狀態碼');
   }
 
   // ---- 限流 ----
