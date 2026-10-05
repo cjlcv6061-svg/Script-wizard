@@ -1552,27 +1552,29 @@ const TSP=(function(){
   }
   // 規格 5.3：每個輸入行恰好標一次；標籤須在集合內；S 的角色須在角色清單內。
   // 角色欄寫成別名時對回 id（無損的容錯）。
-  // checkLabels 把問題分三類：hard（重複、標籤不在集合內：整塊回應不可信）、
-  // soft（缺漏、角色不在清單內：只有那幾行不可信，其餘行仍可採用）、extra（多出不在這一塊的行號：忽略）。
+  // checkLabels 把問題分兩類：soft（缺漏、重複、標籤不在集合內、角色不在清單內：只有那幾行不可信，其餘行仍可採用）、
+  // extra（多出不在這一塊的行號：忽略）。整塊要不要採用由呼叫端看 soft 占比決定。
+  // 角色欄常被小模型連「（青年）」之類的註記一起抄進來（文字是「良（青年）：」），比對前先去掉括號註記。
+  const stripRoleNote=x=>String(x).replace(/[（(][^）)]*[）)]/g,'').trim();
   function checkLabels(parsed, sentNums, roles){
-    const hard=[], soft=[], extra=[], sent=new Set(sentNums), surf=buildSurfaceMap(roles);
-    for(const n of parsed.dup) hard.push('重複 L'+n);
+    const soft=[], extra=[], sent=new Set(sentNums), surf=buildSurfaceMap(roles);
+    for(const n of parsed.dup){ if(sent.has(n)) soft.push({n, msg:'重複 L'+n}); }
     for(const n of sentNums) if(!parsed.map.has(n)) soft.push({n, msg:'缺漏 L'+n});
     for(const [n,v] of parsed.map){
       if(!sent.has(n)){ extra.push('多出 L'+n); continue; }     // 模型繼續往後編的列：不屬於這一塊，忽略即可
-      if('SCDHN'.indexOf(v.label)<0 || v.label.length!==1){ hard.push('標籤不在集合內 L'+n+'：'+v.label); continue; }
+      if('SCDHN'.indexOf(v.label)<0 || v.label.length!==1){ soft.push({n, msg:'標籤不在集合內 L'+n+'：'+v.label}); continue; }
       if(v.label==='S'){
-        const ids=v.role.split(/\s*[\/／]\s*/).map(x=>x.trim()).filter(Boolean).map(x=>surfGet(surf,x));
+        const ids=v.role.split(/\s*[\/／]\s*/).map(x=>stripRoleNote(x)).filter(Boolean).map(x=>surfGet(surf,x));
         if(!ids.length || ids.some(x=>!x)) soft.push({n, msg:'角色不在清單內 L'+n+'：'+v.role});
         else v.role=ids.filter((x,i)=>ids.indexOf(x)===i).join('/');
       }else v.role='';
     }
-    return {hard, soft, extra};
+    return {soft, extra};
   }
   // 回傳錯誤清單（空＝通過）
   function validateLabels(parsed, sentNums, roles){
     const c=checkLabels(parsed, sentNums, roles);
-    return c.hard.concat(c.soft.map(x=>x.msg), c.extra);
+    return c.soft.map(x=>x.msg).concat(c.extra);
   }
 
   // ---------- 本機規則：內嵌指示、日文標記、說話者前綴、場次標題 ----------
@@ -1666,7 +1668,10 @@ const TSP=(function(){
 
   // ---------- 啟發式標記（不靠 LLM）：LLM 整塊失敗時的後備，也是評測的基準線 ----------
   const TERMINAL_RE=/[.!?。！？…”"」』)）]\s*$/;
-  function heuristicLabels(lines, roles, flag){
+  // opts（前綴格式的劇本才傳）：noOwnLine＝不啟用「單獨成行的角色名 → 下一行是台詞」（人物表的「角色名／演員」會誤觸發）；
+  // sep＝只認這種前綴風格（人物表的「名字 – 簡介」不算台詞）
+  function heuristicLabels(lines, roles, flag, opts){
+    const noOwnLine=!!(opts&&opts.noOwnLine), sep=opts&&opts.sep;
     const surf=buildSurfaceMap(roles);
     const names=[...surf.keys()].sort((a,b)=>b.length-a.length);
     const map=new Map();
@@ -1678,12 +1683,12 @@ const TSP=(function(){
       const t=L.text; const _pt=prevText; prevText=t;
       if(SCENE_NO_RE.test(t.replace(/^[=＝\-—\s　*#]+/,'')) && t.length<=60){ put(L.n,'H'); pending=null; continue; }
       if(isPageNumberLine(t,false) || /^[-–—~]\s*[0-9０-９]{1,4}\s*[-–—~]$/.test(t)){ put(L.n,'N'); continue; }
-      const sp=splitSpeakerPrefix(t,surf);
+      const sp=(!sep || pfxMatch(t,sep))?splitSpeakerPrefix(t,surf):null;
       if(sp){ put(L.n,'S',sp.ids.filter((x,i,ar)=>ar.indexOf(x)===i).join('/')); pending=null; continue; }
       if(/^[（(].*[）)]$/.test(t)){ put(L.n,'D'); continue; }
       // 獨立角色名行（整行就是角色稱呼，可含分隔符）
       const toks=t.replace(/[（(][^）)]*[）)]/g,'').split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
-      if(toks.length && toks.every(x=>surfGet(surf,x)) && t.length<=24){ pending=toks.map(x=>surfGet(surf,x)).filter((x,i,ar)=>ar.indexOf(x)===i).join('/'); put(L.n,'N'); continue; }
+      if(!noOwnLine && toks.length && toks.every(x=>surfGet(surf,x)) && t.length<=24){ pending=toks.map(x=>surfGet(surf,x)).filter((x,i,ar)=>ar.indexOf(x)===i).join('/'); put(L.n,'N'); continue; }
       if(pending){ put(L.n,'S',pending); pending=null; continue; }
       // 沒有角色名的行：接在台詞後面、且上一行沒有以句末標點收尾 → 折行續行；否則視為新的一段（舞台指示）
       put(L.n, ((prev==='S'||prev==='C') && !(TERMINAL_RE.test(_pt) && _pt.length<fullW*0.8))?'C':'D');
@@ -1710,7 +1715,16 @@ const TSP=(function(){
   const PFX_LAT="[A-Za-z][A-Za-z.'’-]*(?: [A-Za-z][A-Za-z.'’-]*){0,2}";
   const PFX_TOK='(?:'+PFX_CJK+'|'+PFX_LAT+')';
   // 行首「角色名（指示）：」「角色名 – 」；合說「偉、朗：」「玲／朗／K：」「A and B – 」整串算一個前綴
-  const PFX_RE=new RegExp('^('+PFX_TOK+'(?:\\s*(?:[、,，\\/／&＆]|\\s+and\\s+)\\s*'+PFX_TOK+')*)(?:\\s*[（(][^）)]{0,20}[）)])?(?:\\s*[：:]\\s*\\S|\\s[–—-]\\s+\\S)');
+  const PFX_RE=new RegExp('^('+PFX_TOK+'(?:\\s*(?:[、,，\\/／&＆]|\\s+and\\s+)\\s*'+PFX_TOK+')*)(?:\\s*[（(][^）)]{0,20}[）)])?(?:\\s*([：:])\\s*\\S|\\s([–—-])\\s+\\S)');
+  // 行首前綴的分析：{toks:[稱呼…], kind:'colon'|'dash'}。人物表常見「王家輝 – 王良的大姪兒，男，10歲」（破折號＝簡介），
+  // 台詞卻用冒號；所以前綴風格（colon／dash）要看整份劇本哪一種占絕大多數，另一種不算前綴（sep 為 'mixed' 時兩種都算）。
+  function pfxMatch(text, sep){
+    const m=text.match(PFX_RE); if(!m) return null;
+    const kind=m[2]?'colon':'dash';
+    if(sep && sep!=='mixed' && kind!==sep) return null;
+    const toks=m[1].split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
+    return toks.some(t=>/^https?$/i.test(t))?null:{toks, kind};
+  }
   // 句尾之後又冒出「角色名：」＝兩句台詞被併成一行（或抽取時折行錯位）。「（指示）角色名：」是常見寫法，不算
   const INLINE_PFX_RE=new RegExp('[。！？…!?」”]\\s*('+PFX_CJK+'|'+PFX_LAT+')\\s*(?:[：:]|\\s[–—-]\\s)','g');
   function hasInlinePrefix(text, surf){
@@ -1718,19 +1732,20 @@ const TSP=(function(){
     for(let m; (m=INLINE_PFX_RE.exec(text)); ) if(surfGet(surf,m[1].trim())) return true;
     return false;
   }
-  // 回傳 {on, roles, prefixLines, added}。on=false 表示這份劇本不是「行首前綴」格式，一切照舊。
+  // 回傳 {on, roles, prefixLines, added, sep}。on=false 表示這份劇本不是「行首前綴」格式，一切照舊。
   function detectPrefix(lines, roles){
-    const surf=buildSurfaceMap(roles), cnt=new Map(), parts=l=>{
-      const m=l.text.match(PFX_RE); if(!m) return [];
-      const ts=m[1].split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
-      return ts.some(t=>/^https?$/i.test(t))?[]:ts;
-    };
+    const surf=buildSurfaceMap(roles);
     let body=0;
-    for(const l of lines){
-      if(isPageNumberLine(l.text,false)) continue;
-      body++;
-      for(const t of parts(l)) cnt.set(t,(cnt.get(t)||0)+1);
-    }
+    const count=sep=>{ const c=new Map(); for(const l of lines){ if(isPageNumberLine(l.text,false)) continue; const m=pfxMatch(l.text,sep); if(m) for(const t of m.toks) c.set(t,(c.get(t)||0)+1); } return c; };
+    for(const l of lines) if(!isPageNumberLine(l.text,false)) body++;
+    // 先決定前綴風格：看「稱呼是已知角色或出現 ≥3 次」的前綴行裡，冒號與破折號各占多少
+    let cnt=count(null);
+    const kinds={colon:0, dash:0};
+    for(const l of lines){ const m=pfxMatch(l.text,null); if(m && m.toks.every(t=>surfGet(surf,t)||cnt.get(t)>=3)) kinds[m.kind]++; }
+    const tot=kinds.colon+kinds.dash;
+    const sep=tot && kinds.colon/tot>=0.85?'colon':tot && kinds.dash/tot>=0.85?'dash':'mixed';
+    if(sep!=='mixed') cnt=count(sep);
+    const parts=l=>{ const m=pfxMatch(l.text,sep); return m?m.toks:[]; };
     let sum=0; for(const [t,c] of cnt) if(surfGet(surf,t)||c>=3) sum+=c;
     // 模型沒列出的稱呼要夠常見才補成角色（誤補會讓一般句子被強制標成台詞，比漏補嚴重）：排除偶然出現的「Well – 」「他說：」
     const minCount=Math.max(5,Math.ceil(sum*0.05));
@@ -1753,25 +1768,32 @@ const TSP=(function(){
     for(const [t] of toks){
       if(surfGet(surf2,t)) continue;
       const id=cleanId(t); if(!id || id!==t || surfGet(surf2,id)) continue;
+      // 簡稱：行首只寫「楊：」而模型列的是全名「楊淑華」。恰好有一個角色的名稱含有這個稱呼 → 是同一個人的別名，不新增角色
+      const owners=out.filter(r=>r.name && r.name!==r.id && r.name.includes(t));
+      if(owners.length===1){ owners[0].aliases.push(t); surf2.set(t,owners[0].id); continue; }
       out.push({id, name:id, aliases:[], gender:'n'}); added.push(id);
     }
-    return {on:true, roles:out, prefixLines, added};
+    return {on:true, roles:out, prefixLines, added, sep};
   }
   // 標記完成後套用：有已知前綴的行一律是台詞；沒有前綴卻被標成台詞的行改用規則標並標為待校正；
   // 夾著別人前綴的行標為待校正。labels 會被就地修改。
-  function applyPrefix(lines, labels, roles){
-    const surf=buildSurfaceMap(roles), H=heuristicLabels(lines, roles, false);
+  function applyPrefix(lines, labels, roles, sep){
+    const surf=buildSurfaceMap(roles), H=heuristicLabels(lines, roles, false, {noOwnLine:true, sep});
     const st={forced:0, demoted:0, flagged:0};
     for(const l of lines){
       const cur=labels.get(l.n);
-      const sp=PFX_RE.test(l.text)?splitSpeakerPrefix(l.text,surf):null;      // 前綴必須真的在行首（「（指示）玲：…」不算）
+      const sp=pfxMatch(l.text,sep)?splitSpeakerPrefix(l.text,surf):null;      // 前綴必須真的在行首（「（指示）玲：…」不算），且是這份劇本的前綴風格
       let probe=l.text;
       if(sp){
         const role=sp.ids.filter((x,i,a)=>a.indexOf(x)===i).join('/');
         if(!cur || cur.label!=='S' || cur.role!==role){ labels.set(l.n,{label:'S',role}); st.forced++; }
         else if(cur.rv) labels.set(l.n,{label:'S',role});      // 後備規則標的、行首前綴明確的台詞：這一行是確定的，不必人工看
         probe=sp.rest;
-      }else if(cur && cur.label==='S' && !PFX_RE.test(l.text)){
+      }else if(cur && cur.label==='S' && pfxMatch(l.text,sep) && !cur.rv){
+        // 行首有稱呼，但稱呼不在角色清單（次要角色）：模型填的角色無從核對 → 請人看一眼
+        labels.set(l.n,Object.assign({},cur,{rv:true})); st.flagged++;
+        continue;
+      }else if(cur && cur.label==='S' && !pfxMatch(l.text,sep)){
         const h=H.get(l.n);
         labels.set(l.n,{label:h.label, role:h.role||'', rv:true}); st.demoted++;
         continue;
@@ -1782,15 +1804,15 @@ const TSP=(function(){
     return st;
   }
 
-  const prefixTokens=text=>{ const m=text.match(PFX_RE); return m?m[1].split(SPK_SEP).map(x=>x.trim()).filter(Boolean):[]; };
+  const prefixTokens=(text,sep)=>{ const m=pfxMatch(text,sep); return m?m.toks:[]; };
   // 模型標了清單外的角色，但那一行的行首真的寫著這個稱呼 → 是文字裡的次要角色（第一段樣本沒涵蓋到），
   // 補進清單；否則整塊會因為一個沒見過的角色被判失敗。行首沒寫的（模型自己編的）不採納。
-  function adoptRoles(p, textOf, roles, compactRoles){
+  function adoptRoles(p, textOf, roles, compactRoles, sep){
     const surf=buildSurfaceMap(roles);
     for(const [n,v] of p.map){
       if(v.label!=='S' || !v.role || !textOf.has(n)) continue;
-      const toks=prefixTokens(textOf.get(n));
-      for(const part of v.role.split(/\s*[\/／]\s*/).map(x=>x.trim()).filter(Boolean)){
+      const toks=prefixTokens(textOf.get(n),sep);
+      for(const part of v.role.split(/\s*[\/／]\s*/).map(x=>stripRoleNote(x)).filter(Boolean)){
         if(surfGet(surf,part) || roles.length>=40) continue;
         const id=cleanId(part);
         if(!id || id!==part || !toks.includes(part)) continue;
@@ -1800,11 +1822,11 @@ const TSP=(function(){
   }
   // 前綴格式劇本的角色清單整理（在 applyPrefix 之後）：沒有任何台詞的角色（模型編的）不留；
   // 名稱／別名若在整份原文裡一次都沒出現過（或只有單一個字，必然出現過、不算依據），就是沒有依據的（例如範例裡的虛構姓氏），名稱改回 id、別名丟掉。
-  function tidyRoles(lines, labels, roles){
+  function tidyRoles(lines, labels, roles, sep){
     const used=new Set(), hay=lines.map(l=>l.text).join('\n').toLowerCase(), dropped=[], renamed=[], ptok=new Set();
     for(const l of lines){
       const v=labels.get(l.n); if(v && v.label==='S') for(const x of v.role.split('/')) used.add(x);
-      for(const t of prefixTokens(l.text)) ptok.add(t.toLowerCase());
+      for(const t of prefixTokens(l.text,sep)) ptok.add(t.toLowerCase());
     }
     // 有依據＝本身就是行首前綴，或長度 ≥2 且在原文出現過（單字在原文裡必然出現過，不算依據）
     const supported=x=>{ x=String(x||'').toLowerCase(); return !!x && (ptok.has(x) || (x.length>=2 && hay.includes(x))); };
@@ -1911,31 +1933,25 @@ const TSP=(function(){
     async function doChunk(ci){
       const ch=chunks[ci], sent=lines.slice(ch.from,ch.to), nums=sent.map(l=>l.n), wire=toWire(sent);
       const coreN=new Set(lines.slice(ch.start,ch.end).map(l=>l.n));
-      const SMALL=Math.max(2,Math.floor(coreN.size*0.05)), LIMIT=Math.max(3,Math.floor(coreN.size*0.25));
-      let best=null;                       // 取問題最少的一次回應；只有少數行有問題（缺漏／角色不明）時仍採用
-      for(let a=0;a<2;a++){
+      const LIMIT=Math.max(3,Math.floor(coreN.size*0.25));
+      let best=null;                       // 問題行 ≤25% 就採用（其餘行照用模型的標記）；超過才重試一次（取較少的），仍超過整塊失敗。
+      for(let a=0;a<2 && !best;a++){       // 溫度 0 時重試通常得到同一個答案，所以問題不多時不重試（慢的供應商一次重試要好幾分鐘）
         try{
           const p=parseLabels(await callApi({mode:'label', lines:wire, roles:compactRoles, rules:fmt.rules}));
-          if(pm.on) adoptRoles(p, textOf, fmt.roles, compactRoles);
-          const c=checkLabels(p, nums, fmt.roles), soft=c.soft.filter(x=>coreN.has(x.n)).map(x=>x.n);
-          if(c.hard.length || soft.length>LIMIT){
-            retried++; const msgs=c.hard.concat(c.soft.map(x=>x.msg));
-            errors.push({chunk:ci+1, attempt:a+1, errors:msgs.slice(0,5), total:msgs.length});
-          }else{
-            if(!best || soft.length<best.soft.length) best={p, soft};
-            if(soft.length<=SMALL) break;
-            retried++; errors.push({chunk:ci+1, attempt:a+1, errors:['有 '+soft.length+' 行缺漏或角色不明，重試一次'], total:soft.length});
-          }
+          if(pm.on) adoptRoles(p, textOf, fmt.roles, compactRoles, pm.sep);
+          const c=checkLabels(p, nums, fmt.roles), soft=[...new Set(c.soft.map(x=>x.n).filter(n=>coreN.has(n)))];
+          if(soft.length<=LIMIT) best={p, soft};
+          else{ retried++; errors.push({chunk:ci+1, attempt:a+1, errors:c.soft.slice(0,5).map(x=>x.msg), total:soft.length}); }
         }catch(e){ if(e && e.fatal) throw e; retried++; errors.push({chunk:ci+1, attempt:a+1, errors:[String(e&&e.message||e)], total:1}); }
       }
       const core=lines.slice(ch.start,ch.end);
       if(best){
-        const bad=new Set(best.soft), h=bad.size?heuristicLabels(core, fmt.roles, true):null;     // 只有問題行用本機規則標並標為待校正
+        const bad=new Set(best.soft), h=bad.size?heuristicLabels(core, fmt.roles, true, pm.on?{noOwnLine:true, sep:pm.sep}:null):null;     // 只有問題行用本機規則標並標為待校正
         for(const l of core) labels.set(l.n, bad.has(l.n)?h.get(l.n):best.p.map.get(l.n));
         if(bad.size){ partial.push(ci+1); partialLines+=bad.size; }
       }else{
         failed.push(ci+1);
-        const h=heuristicLabels(core, fmt.roles, true);          // 整塊失敗：用本機規則先標，並標為待人工校正
+        const h=heuristicLabels(core, fmt.roles, true, pm.on?{noOwnLine:true, sep:pm.sep}:null);          // 整塊失敗：用本機規則先標，並標為待人工校正
         for(const l of core) labels.set(l.n, h.get(l.n));
       }
       done++; prog({stage:'label',done,total:chunks.length,failed:failed.length});
@@ -1950,14 +1966,14 @@ const TSP=(function(){
     }));
     let pfx=null, finalRoles=fmt.roles;
     if(pm.on){
-      pfx=applyPrefix(lines, labels, fmt.roles);
-      const t=tidyRoles(lines, labels, fmt.roles); finalRoles=t.roles; pfx.dropped=t.dropped; pfx.renamed=t.renamed;
+      pfx=applyPrefix(lines, labels, fmt.roles, pm.sep);
+      const t=tidyRoles(lines, labels, fmt.roles, pm.sep); finalRoles=t.roles; pfx.dropped=t.dropped; pfx.renamed=t.renamed;
     }
     const asm=assemble(lines, labels, finalRoles);
     const roles=finalRoles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
     return {roles, rules:fmt.rules, scenes:asm.scenes, labels,
       stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), partialChunkNos:partial.sort((a,b)=>a-b), partialLines, retried, lines:lines.length}, asm.stats,
-        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added}, pfx):null}), errors};
+        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null}), errors};
   }
 
   return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,checkLabels,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};

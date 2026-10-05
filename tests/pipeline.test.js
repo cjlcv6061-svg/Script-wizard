@@ -174,6 +174,42 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     const zz = []; for (let i = 0; i < 12; i++) zz.push('葉志偉：甲' + i, '朗：乙' + i);
     eq(T.detectPrefix(mk(zz), [{ id: '偉', name: '葉志偉', aliases: [] }, { id: '朗', name: '朗', aliases: [] }]).roles.map(r => r.id), ['偉', '朗'], '全名／簡稱：id 不動');
   }
+  // 簡稱：行首寫「楊：」、模型列的是全名「楊淑華」→ 當別名，不新增第二個角色；有歧義（兩個角色都含這個字）才新增
+  {
+    const zy = []; for (let i = 0; i < 12; i++) zy.push('楊：甲' + i, '良：乙' + i, '張：丙' + i);
+    const d = T.detectPrefix(mk(zy), [{ id: '淑華', name: '楊淑華', aliases: [] }, { id: '良', name: '王良', aliases: [] }, { id: '美華', name: '張美華', aliases: [] }, { id: '太', name: '張太', aliases: [] }]);
+    eq([d.added, d.roles[0].aliases], [['張'], ['楊']], '「楊」只屬於楊淑華 → 別名；「張」同時屬於張美華與張太 → 有歧義，新增角色');
+    eq(T.splitSpeakerPrefix('楊：你好', T.buildSurfaceMap(d.roles)).ids, ['淑華'], '行首「楊：」對回角色「淑華」');
+  }
+  // 前綴風格：台詞用冒號、人物表用破折號（「王家輝 – 王良的大姪兒，男，10歲」是簡介，不是台詞）→ 只認冒號
+  {
+    const cast = ['人物表', '王家輝 – 王良的大姪兒，男，10歲', '王家怡 – 王良的大姪女，8歲', '王良 – 劇中的亞伯，男，40歲'];
+    const dlg = []; for (let i = 0; i < 12; i++) dlg.push('輝：第' + i + '句', '良：回應' + i, '怡：插話' + i);
+    const ls = mk(cast.concat(dlg));
+    const rs = [{ id: '輝', name: '王家輝', aliases: [] }, { id: '良', name: '王良', aliases: [] }, { id: '怡', name: '王家怡', aliases: [] }];
+    const d = T.detectPrefix(ls, rs);
+    eq([d.on, d.sep], [true, 'colon'], '冒號占絕大多數 → 前綴風格 colon');
+    const lab = new Map(ls.map(l => [l.n, { label: /^[輝良怡]：/.test(l.text) ? 'S' : 'D', role: /^輝/.test(l.text) ? '輝' : /^良/.test(l.text) ? '良' : '怡' }]));
+    for (const n of [2, 3, 4]) lab.set(n, { label: 'S', role: '輝' });      // 模型把人物表的簡介行誤標成台詞
+    const st = T.applyPrefix(ls, lab, d.roles, d.sep);
+    eq([2, 3, 4].map(n => lab.get(n).label), ['D', 'D', 'D'], '人物表的「名字 – 簡介」不被當成台詞（模型誤標的改用規則：指示）');
+    eq(st.demoted, 3, '降級 3 行');
+    // 不分風格（sep 未指定）時，簡介行會被當成前綴——這正是要避免的
+    const lab2 = new Map([[2, { label: 'S', role: '輝' }]]);
+    eq(T.applyPrefix(mk(['x', '王家輝 – 王良的大姪兒，男，10歲']), lab2, d.roles).forced + T.applyPrefix(mk(['x', '王家輝 – 王良的大姪兒，男，10歲']), new Map(), d.roles).forced, 1, '（對照）不指定風格時簡介行會被強制標成台詞');
+    // 人物表「角色名／演員／演員」：前綴格式下，單獨成行的角色名不會讓下一行（演員名）變成台詞
+    const tbl = mk(['兄', 'Matthew', 'John', '妹', 'Iris', 'Vivian'].concat(dlg));
+    const labT = new Map(tbl.map(l => [l.n, { label: /^[輝良怡]：/.test(l.text) ? 'S' : 'N', role: /^輝/.test(l.text) ? '輝' : /^良/.test(l.text) ? '良' : '怡' }]));
+    for (const n of [2, 3, 5, 6]) labT.set(n, { label: 'S', role: '輝' });      // 模型把演員名誤標成台詞
+    T.applyPrefix(tbl, labT, d.roles.concat([{ id: '兄', name: '兄', aliases: [] }, { id: '妹', name: '妹', aliases: [] }]), 'colon');
+    eq([2, 3, 5, 6].map(n => labT.get(n).label), ['D', 'D', 'D', 'D'], '演員名不會因為上一行是角色名就被規則標成台詞');
+    // 全是破折號的劇本（window.pdf 那種）：風格 dash，行為不變
+    const en = []; for (let i = 0; i < 12; i++) en.push('Madison – line ' + i, 'Alexandre – reply ' + i);
+    eq(T.detectPrefix(mk(en), rl('Madison', 'Alexandre')).sep, 'dash', '全是破折號 → dash');
+    // 兩種風格都大量使用 → mixed，兩種都認
+    const mx = []; for (let i = 0; i < 10; i++) mx.push('兄：甲' + i, '妹 – 乙' + i);
+    eq(T.detectPrefix(mk(mx), rl('兄', '妹')).sep, 'mixed', '兩種風格各占一半 → mixed');
+  }
   // 太少見的稱呼（3 次）不補成角色
   eq(T.detectPrefix(mk(zh.filter(x => !/^媽：丙[345]/.test(x))), rl('兄', '妹')).added, [], '只出現 3 次的稱呼不補成角色');
   // 英文破折號格式：偶然出現的「Well – 」不當角色；網址不當角色
@@ -214,9 +250,12 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     eq(rs.map(r => r.id), ['兄', '妹', '母'], '行首寫著「母：」→ 採納；模型編的「甲乙」（行首是「路人：」）不採納');
     eq(compact, [{ id: '母', name: '母', aliases: [] }], '同步更新送給後續塊的角色清單');
     eq(T.checkLabels(T.parseLabels('1|S|母\n2|S|甲乙\n3|S|兄'), [1, 2, 3, 4], rs).soft.map(x => x.n).sort(), [2, 4], 'checkLabels：角色不明與缺漏是 soft，其餘行不受影響');
-    eq(T.checkLabels(T.parseLabels('1|S|兄\n1|C|\n2|X|'), [1, 2], rs).hard.length, 2, 'checkLabels：重複與標籤不在集合內是 hard');
+    eq(T.checkLabels(T.parseLabels('1|S|兄\n1|C|\n2|X|'), [1, 2], rs).soft.map(x => x.n).sort(), [1, 2], 'checkLabels：重複與標籤不在集合內也只是那一行有問題（soft），不再讓整塊作廢');
+    eq(T.checkLabels(T.parseLabels('1|S|兄（青年）\n2|S|妹（低聲） / 兄\n3|S|兄'), [1, 2, 3], rs).soft, [], '角色欄連括號註記一起抄進來（「兄（青年）」）：去掉註記後比對');
+    const ann = T.parseLabels('1|S|兄（青年）\n2|S|妹（低聲） / 兄'); T.checkLabels(ann, [1, 2], rs);
+    eq([ann.map.get(1).role, ann.map.get(2).role], ['兄', '妹/兄'], '註記去掉後角色正規化為 id');
     const ex = T.checkLabels(T.parseLabels('1|S|兄\n2|C|\n3|D|\n9|S|兄'), [1, 2, 3], rs);
-    eq([ex.hard.length, ex.soft.length, ex.extra], [0, 0, ['多出 L9']], 'checkLabels：多出不在這一塊的行號只記為 extra，不算錯');
+    eq([ex.soft.length, ex.extra], [0, ['多出 L9']], 'checkLabels：多出不在這一塊的行號只記為 extra，不算錯');
   }
   // tidyRoles：沒有台詞的角色不留；名稱在原文出現過就保留
   {
@@ -228,6 +267,12 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     const t2 = T.tidyRoles(mk(['妹：嗨', '兄：好']), new Map([[1, { label: 'S', role: '眉' }], [2, { label: 'S', role: '兄' }]]), [{ id: '眉', name: '妹', aliases: ['妹'] }, { id: '兄', name: '格', aliases: [] }]);
     eq(t2.roles.map(r => [r.id, r.name, r.aliases]), [['眉', '妹', ['妹']], ['兄', '兄', []]], '單字名稱：是行首前綴（妹）就保留，否則（格）改回 id');
     eq([t.dropped, t.renamed], [['麻'], ['妹']], '回報移除與改名');
+  }
+  // 行首有稱呼但不在角色清單（次要角色「護士：」），模型卻填了別的角色 → 標待校正（角色無從核對）
+  {
+    const lab3 = new Map([[1, { label: 'S', role: '兄' }]]);
+    const st3 = T.applyPrefix(mk(['護士：請借過']), lab3, roles2);
+    eq([lab3.get(1), st3.flagged], [{ label: 'S', role: '兄', rv: true }, 1], '行首稱呼不在清單：保留模型的標記但標待校正');
   }
   // 「（指示）角色名：」常見寫法不算夾帶前綴，也不被強制改標
   const lab2 = new Map([[1, { label: 'D', role: '' }]]);
@@ -252,9 +297,9 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(r.stats.failedChunks === 0 && r.stats.review === 0, `${id}：沒有失敗塊／待校正行`);
     eq(r.scenes.length, 22, `${id}：22 個場次`);
   }
-  // 重試：回應常壞掉，重試一次後多數通過；兩次都壞的塊用本機規則後備並標待校正
+  // 重試：回應壞掉（漏掉一半，超過可容忍的比例）時重試一次，多數通過；兩次都壞的塊用本機規則後備並標待校正
   {
-    const { r, mock, lines, v } = await run('wrapped', { failRate: 0.45, seed: 3 }, { concurrency: 1 });
+    const { r, mock, lines, v } = await run('wrapped', { failRate: 0.45, failKind: 3, seed: 3 }, { concurrency: 1 });
     ok(r.stats.retried > 0, '有重試');
     ok(mock.calls.label > r.stats.chunks, '重試多打了請求：' + mock.calls.label + ' > ' + r.stats.chunks);
     ok(r.stats.failedChunks === r.stats.failedChunkNos.length, '失敗塊號清單');
@@ -262,10 +307,10 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     const s = scoreLabels(lines, r.labels, v.gold);
     ok(s.acc > 0.95, '後備後行級準確率仍高：' + s.acc.toFixed(4));
   }
-  // 全部壞掉（重複行＝整塊不可信）：整份都走後備，仍產出劇本，不中止
+  // 全部壞掉（每塊都漏掉一半，超過可容忍的比例）：整份都走後備，仍產出劇本，不中止
   {
-    const { r, lines, v } = await run('colon-fw', { failRate: 1, failKind: 2, seed: 5 });
-    eq(r.stats.failedChunks, r.stats.chunks, '全部失敗塊');
+    const { r, lines, v } = await run('colon-fw', { failRate: 1, failKind: 3, seed: 5 });
+    eq(r.stats.failedChunks, r.stats.chunks, '全部失敗塊（每塊都漏掉一半）');
     ok(r.scenes.length === 22 && scoreLabels(lines, r.labels, v.gold).acc > 0.95, '後備仍組出 22 場，行級 >95%');
     const surf = T.buildSurfaceMap(r.roles);
     ok(lines.every(l => { const x = r.labels.get(l.n); return x.rv || (x.label === 'S' && T.splitSpeakerPrefix(l.text, surf)); }), '每一行都帶待校正旗標；唯一的例外是行首前綴明確的台詞（規則確定，不必人工看）');
@@ -291,15 +336,23 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(r.stats.failedChunks === 0 && r.stats.partialLines === 0 && r.stats.retried === 0, '多回 400 列：整塊照用（失敗 ' + r.stats.failedChunks + '、重試 ' + r.stats.retried + '）');
     ok(scoreLabels(lines, r.labels, v.gold).acc === 1, '標記與沒有多列時完全一致');
   }
-  // 問題行太多（>25%）→ 整塊失敗；介於兩者之間 → 重試一次取較好的
+  // 問題行太多（>25%）→ 重試一次、仍太多整塊失敗；不到 25% → 直接採用，不重試（溫度 0 時重試通常是同一個答案，慢的供應商一次要好幾分鐘）
   {
     const v = vs['colon-fw'], lines = T.buildLines({ text: v.text }).lines, mock = makeMock(lines, v.gold, {});
     let calls = 0;
-    const drop = frac => async p => { const out = await mock.callApi(p); if (p.mode === 'format') return out; calls++; const rows = out.split('\n'); const k = Math.floor(rows.length * frac); return rows.filter((x, i) => i < 1 || i % Math.max(1, Math.round(1 / frac)) !== 0 || !/^\d/.test(x)).join('\n'); };
+    const drop = frac => async p => { const out = await mock.callApi(p); if (p.mode === 'format') return out; calls++; const rows = out.split('\n'); return rows.filter((x, i) => i < 1 || i % Math.max(1, Math.round(1 / frac)) !== 0 || !/^\d/.test(x)).join('\n'); };
     calls = 0; const r1 = await T.runPipeline({ lines, callApi: drop(0.5), concurrency: 1 });
-    eq(r1.stats.failedChunks, r1.stats.chunks, '漏掉一半的行：整塊失敗（超過 25%）');
+    ok(r1.stats.failedChunks === r1.stats.chunks && calls === 2 * r1.stats.chunks, '漏掉一半的行：每塊重試一次後整塊失敗（請求 ' + calls + ' 次）');
     calls = 0; const r2 = await T.runPipeline({ lines, callApi: drop(0.1), concurrency: 1 });
-    ok(r2.stats.failedChunks === 0 && r2.stats.partialLines > 0 && calls > r2.stats.chunks, '漏掉約 10% 的行：重試一次，之後採用較好的那次（請求 ' + calls + ' 次）');
+    ok(r2.stats.failedChunks === 0 && r2.stats.partialLines > 0 && calls === r2.stats.chunks, '漏掉約 10% 的行：直接採用、不重試（請求 ' + calls + ' 次 = ' + r2.stats.chunks + ' 塊）');
+  }
+  // 重複列、標籤怪異的列：只有那幾行走後備，不整塊作廢
+  {
+    const v = vs['colon-fw'], lines = T.buildLines({ text: v.text }).lines, mock = makeMock(lines, v.gold, {});
+    const wrap = async p => { const out = await mock.callApi(p); return p.mode === 'format' ? out : out.replace(/\n```\s*$/, '') + '\n' + out.split('\n').find(x => /^\d+\|/.test(x)).replace(/\|[A-Z]\|.*/, '|X|') + '\n```'; };      // 加一列重複行號、標籤是 X
+    const r = await T.runPipeline({ lines, callApi: wrap, concurrency: 1 });
+    ok(r.stats.failedChunks === 0 && r.stats.retried === 0, '重複列＋怪標籤：沒有整塊失敗、沒有重試（失敗 ' + r.stats.failedChunks + '、重試 ' + r.stats.retried + '）');
+    ok(scoreLabels(lines, r.labels, v.gold).acc > 0.99, '行級準確率仍 >99%');
   }
   // 第一段壞掉兩次 → 丟錯；429 → 立即中止（fatal）
   {
