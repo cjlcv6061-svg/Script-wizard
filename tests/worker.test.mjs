@@ -120,6 +120,23 @@ const post = (env, body, headers = {}, raw) => worker.fetch(new Request('https:/
     }
   }
 
+  // ---- 推理強度：預設完全不帶 reasoning；只有明確設成合法值才帶 ----
+  {
+    const body = async (over, mode = 'label') => { upstreamCalls.length = 0; upstreamImpl = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: mode === 'label' ? '1|S|偉' : '{"roles":[{"id":"偉"}],"rules":{}}' } }] }) }); await post(makeEnv({ DAILY_PER_IP: '100', DAILY_TOTAL: '100', ...over }), mode === 'label' ? labelBody() : { mode: 'format', lines: [[1, '偉：你好']] }); return JSON.parse(upstreamCalls[0].init.body); };
+    ok(!('reasoning' in await body({})), '沒設 REASONING_EFFORT：請求完全不帶 reasoning');
+    for (const v of ['', 'fast', 'true', '0', 'extreme', null]) ok(!('reasoning' in await body({ REASONING_EFFORT: v })), 'REASONING_EFFORT=' + JSON.stringify(v) + '：不帶 reasoning');
+    for (const v of ['none', 'minimal', 'low', 'medium', 'high', ' LOW ']) eq((await body({ REASONING_EFFORT: v })).reasoning, { effort: v.trim().toLowerCase() }, 'REASONING_EFFORT=' + JSON.stringify(v) + '：reasoning.effort');
+    eq((await body({ REASONING_EFFORT: 'none' }, 'format')).reasoning, { effort: 'none' }, 'format 模式也帶');
+  }
+  // 上游逾時在日誌裡看得出來（不含劇本內容）
+  {
+    const env = makeEnv({ DAILY_PER_IP: '100', DAILY_TOTAL: '100' });
+    upstreamImpl = async () => { const e = new Error('aborted'); e.name = 'AbortError'; throw e; };
+    logs.length = 0; const r = await post(env, labelBody());
+    const l = JSON.parse(logs[0]);
+    ok(r.status === 503 && l.upstream === 'network' && /timeout/.test(l.upstream_msg) && !logs[0].includes('偉：你好'), '上游逾時：503，日誌記 timeout');
+  }
+
   // ---- 輸出過濾：只回標籤／白名單欄位 ----
   {
     const env = makeEnv({ DAILY_PER_IP: '100', DAILY_TOTAL: '100' });

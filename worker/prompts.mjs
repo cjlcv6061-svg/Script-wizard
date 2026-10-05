@@ -120,7 +120,14 @@ export function dataCollection(env) {
   return String((env && env.DATA_COLLECTION) || '').trim().toLowerCase() === 'allow' ? 'allow' : 'deny';
 }
 
-// OpenRouter 請求本體。env: { MODEL, PROVIDERS, DATA_COLLECTION? }
+// 推理型模型（會先輸出思考過程）：思考會吃掉 max_tokens、讓請求又慢又偶爾回空內容。REASONING_EFFORT 設成
+// none／minimal／low／medium／high 其中之一，才會帶 reasoning:{effort}；沒設或其他值＝完全不帶（不推理的模型不受影響）。
+export function reasoningEffort(env) {
+  const v = String((env && env.REASONING_EFFORT) || '').trim().toLowerCase();
+  return ['none', 'minimal', 'low', 'medium', 'high'].includes(v) ? v : '';
+}
+
+// OpenRouter 請求本體。env: { MODEL, PROVIDERS, DATA_COLLECTION?, REASONING_EFFORT? }
 export function buildRequest(env, payload) {
   const providers = String(env.PROVIDERS || 'together,fireworks').split(',').map(s => s.trim()).filter(Boolean);
   const body = {
@@ -131,6 +138,8 @@ export function buildRequest(env, payload) {
     // 只允許清單內供應商，且要求不保留／不訓練
     provider: { order: providers, only: providers, allow_fallbacks: true, data_collection: dataCollection(env) }
   };
+  const effort = reasoningEffort(env);
+  if (effort) body.reasoning = { effort };
   if (payload.mode === 'format') body.response_format = { type: 'json_object' };
   return body;
 }

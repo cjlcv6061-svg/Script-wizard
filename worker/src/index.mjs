@@ -110,7 +110,7 @@ export default {
       });
       clearTimeout(timer);
     } catch (e) {
-      log(503, { upstream: 'network' });
+      log(503, { upstream: 'network', upstream_msg: e && e.name === 'AbortError' ? 'timeout（上游超過 110 秒沒有回應）' : 'network error' });
       return json({ error: 'service_unavailable' }, 503, H);
     }
     // 供應商全數失敗、額度用盡、被限流…一律回 503；不會也不可能路由到清單外（請求帶 provider.only）
