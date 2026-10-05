@@ -1684,6 +1684,16 @@ const TSP=(function(){
     return map;
   }
 
+  // 模型標成 H 的行必須像個標題：網址、信箱、版權符號、頁碼、過長的行都不是場次標題（改當雜訊）
+  function plausibleHeading(t){
+    t=String(t||'').trim();
+    if(!t || t.length>80) return false;
+    if(/https?:\/\/|www\.|@|©|\bISBN\b/i.test(t)) return false;
+    if(isPageNumberLine(t,true)) return false;
+    if(t.length>40 && !SCENE_NO_RE.test(t.replace(/^[=＝\-—\s　*#]+/,''))) return false;
+    return true;
+  }
+
   // ---------- 組回（規格 5.3）：依行號，C 併入前一個 S，H 開新場景，N 丟棄（保留為 {x}）----------
   // 折行接回：兩邊都是半形字元（英文等）時補一個空白；中文不補
   const joinParts=(a,b)=>!a?b:(/[!-~]$/.test(a)&&/^[!-~]/.test(b))?a+' '+b:a+b;
@@ -1693,9 +1703,10 @@ const TSP=(function(){
     let cur=null, lastS=null;
     const newScene=h=>{ cur={meta:h?parseHeading(h):{no:'',name:'',season:'',place:''}, heads:h?[h]:[], items:[]}; scenes.push(cur); lastS=null; };
     for(const L of lines){
-      const lab=labels.get(L.n)||{label:'N',role:'',rv:true};
+      let lab=labels.get(L.n)||{label:'N',role:'',rv:true};
       stats[lab.label]=(stats[lab.label]||0)+1;
       const rv=!!lab.rv;
+      if(lab.label==='H' && !plausibleHeading(L.text)){ lab={label:'N',role:'',rv:true}; stats.H--; stats.N=(stats.N||0)+1; }
       if(lab.label==='H'){
         if(cur && !cur.items.some(x=>x.k!=='X') && cur.heads.length){ cur.heads.push(L.text); cur.meta=parseHeading(cur.heads.join(' ')); }   // 連續兩行標題併成一個場次
         else newScene(L.text);
@@ -1734,6 +1745,14 @@ const TSP=(function(){
       if(!ls.some(l=>l.x===undefined)) continue;                // 只有標題或雜訊的場次不要
       const m=sc.meta;
       outScenes.push({no:m.no, name:m.name, season:m.season, place:m.place, lines:ls});
+    }
+    // 一個台詞都沒有的場次（多半是封面／前言被誤切出來）併回相鄰場次，不要單獨成為一個場次
+    for(let i=0;i<outScenes.length && outScenes.length>1;){
+      const sc=outScenes[i];
+      if(sc.lines.some(l=>l.s!==undefined)){ i++; continue; }
+      if(i===0) outScenes[1].lines=sc.lines.concat(outScenes[1].lines);
+      else outScenes[i-1].lines=outScenes[i-1].lines.concat(sc.lines);
+      outScenes.splice(i,1);
     }
     for(const sc of outScenes) for(const l of sc.lines) if(l.rv) stats.review++;
     return {scenes:outScenes, stats};

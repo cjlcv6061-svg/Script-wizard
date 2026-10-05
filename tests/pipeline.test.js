@@ -124,6 +124,20 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   const rj = T.assemble([L(1, 'Alexandre – value here,'), L(2, 'believe me.')], lab([1, 'S', 'Alexandre'], [2, 'C']), [{ id: 'Alexandre', name: 'Alexandre', aliases: [] }]);
   eq(rj.scenes[0].lines[0], { s: 'Alexandre', t: 'value here, believe me.' }, '標點結尾的英文續行也補空白，且剝掉破折號前綴');
   eq(r.stats.orphanC, 1, '統計孤兒續行');
+  // 網址當成 H：擋掉；沒有台詞的場次併回相鄰場次
+  {
+    const en = [{ id: 'Madison', name: 'Madison', aliases: [] }, { id: 'Alexandre', name: 'Alexandre', aliases: [] }];
+    const ls2 = [L(1, 'This text is free.'), L(2, 'https://comediatheque.net'), L(3, 'Madison (yelling) – No!'), L(4, 'Alexandre – Hands up!')];
+    const r5 = T.assemble(ls2, lab([1, 'D'], [2, 'H'], [3, 'S', 'Madison'], [4, 'S', 'Alexandre']), en);
+    eq(r5.scenes.length, 1, '網址行不是場次標題，不會切出場次');
+    eq(r5.scenes[0].lines[1], { x: 'https://comediatheque.net', }, '被擋掉的 H 當雜訊保留');
+    eq(T.assemble([L(1, '© 2023 某某'), L(2, '偉：甲')], lab([1, 'H'], [2, 'S', '偉']), roles).scenes.length, 1, '版權行不是標題');
+    eq(T.assemble([L(1, 'x'.repeat(60)), L(2, '偉：甲')], lab([1, 'H'], [2, 'S', '偉']), roles).scenes.length, 1, '過長的行不是標題');
+    // 封面誤標成 H、之後才是真的場次：無台詞的封面場次併入下一場
+    const r6 = T.assemble([L(1, '封面'), L(2, '作者資訊'), L(3, '第一場　求神'), L(4, '偉：甲'), L(5, '第二場　暢談'), L(6, '朗：乙')], lab([1, 'H'], [2, 'D'], [3, 'H'], [4, 'S', '偉'], [5, 'H'], [6, 'S', '朗']), roles);
+    eq(r6.scenes.map(s => s.no), ['第一場', '第二場'], '封面誤切出的、沒有台詞的場次併入下一場，真正的場次保留');
+    ok(r6.scenes[0].lines[0].d === '作者資訊' && r6.scenes.every(s => s.lines.some(l => l.s)), '每個場次都至少有一句台詞');
+  }
   // 無標題：全部進單一場景
   const r2 = T.assemble([L(1, '偉：甲'), L(2, '朗：乙')], lab([1, 'S', '偉'], [2, 'S', '朗']), roles);
   eq(r2.scenes.length, 1, '無標題劇本放進單一場景');
