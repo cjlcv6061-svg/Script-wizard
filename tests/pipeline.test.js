@@ -204,6 +204,8 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     eq(compact, [{ id: '母', name: '母', aliases: [] }], '同步更新送給後續塊的角色清單');
     eq(T.checkLabels(T.parseLabels('1|S|母\n2|S|甲乙\n3|S|兄'), [1, 2, 3, 4], rs).soft.map(x => x.n).sort(), [2, 4], 'checkLabels：角色不明與缺漏是 soft，其餘行不受影響');
     eq(T.checkLabels(T.parseLabels('1|S|兄\n1|C|\n2|X|'), [1, 2], rs).hard.length, 2, 'checkLabels：重複與標籤不在集合內是 hard');
+    const ex = T.checkLabels(T.parseLabels('1|S|兄\n2|C|\n3|D|\n9|S|兄'), [1, 2, 3], rs);
+    eq([ex.hard.length, ex.soft.length, ex.extra], [0, 0, ['多出 L9']], 'checkLabels：多出不在這一塊的行號只記為 extra，不算錯');
   }
   // tidyRoles：沒有台詞的角色不留；名稱在原文出現過就保留
   {
@@ -266,6 +268,14 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(r.stats.review <= r.stats.partialLines + 2 && r.stats.review < 60, what + '：待校正的只會是走後備的行（前綴明確的台詞由規則確認，不必標）：' + r.stats.review + ' ≤ ' + r.stats.partialLines);
     ok(scoreLabels(lines, r.labels, v.gold).acc > 0.99 && r.scenes.length === 22, what + '：行級準確率仍 >99%、22 場');
     ok(mock.calls.label === r.stats.chunks, what + '：問題很少就不重試（' + mock.calls.label + ' 次請求）');
+  }
+  // 模型繼續往後多編了幾百列：多出的列忽略，送出的行照用，不重試、不失敗
+  {
+    const v = vs['colon-fw'], lines = T.buildLines({ text: v.text }).lines, mock = makeMock(lines, v.gold, {});
+    const wrap = async p => { const out = await mock.callApi(p); if (p.mode === 'format') return out; const last = Math.max(...p.lines.map(x => x[0])); return out.replace(/\n```\s*$/, '') + '\n' + Array.from({ length: 400 }, (_, i) => (last + 1 + i) + '|S|偉').join('\n') + '\n```'; };
+    const r = await T.runPipeline({ lines, callApi: wrap, concurrency: 1 });
+    ok(r.stats.failedChunks === 0 && r.stats.partialLines === 0 && r.stats.retried === 0, '多回 400 列：整塊照用（失敗 ' + r.stats.failedChunks + '、重試 ' + r.stats.retried + '）');
+    ok(scoreLabels(lines, r.labels, v.gold).acc === 1, '標記與沒有多列時完全一致');
   }
   // 問題行太多（>25%）→ 整塊失敗；介於兩者之間 → 重試一次取較好的
   {

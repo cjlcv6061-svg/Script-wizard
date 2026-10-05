@@ -1552,14 +1552,14 @@ const TSP=(function(){
   }
   // 規格 5.3：每個輸入行恰好標一次；標籤須在集合內；S 的角色須在角色清單內。
   // 角色欄寫成別名時對回 id（無損的容錯）。
-  // checkLabels 把問題分兩類：hard（重複、多出、標籤不在集合內：整塊回應不可信）與
-  // soft（缺漏、角色不在清單內：只有那幾行不可信，其餘行仍可採用）。
+  // checkLabels 把問題分三類：hard（重複、標籤不在集合內：整塊回應不可信）、
+  // soft（缺漏、角色不在清單內：只有那幾行不可信，其餘行仍可採用）、extra（多出不在這一塊的行號：忽略）。
   function checkLabels(parsed, sentNums, roles){
-    const hard=[], soft=[], sent=new Set(sentNums), surf=buildSurfaceMap(roles);
+    const hard=[], soft=[], extra=[], sent=new Set(sentNums), surf=buildSurfaceMap(roles);
     for(const n of parsed.dup) hard.push('重複 L'+n);
     for(const n of sentNums) if(!parsed.map.has(n)) soft.push({n, msg:'缺漏 L'+n});
     for(const [n,v] of parsed.map){
-      if(!sent.has(n)){ hard.push('多出 L'+n); continue; }
+      if(!sent.has(n)){ extra.push('多出 L'+n); continue; }     // 模型繼續往後編的列：不屬於這一塊，忽略即可
       if('SCDHN'.indexOf(v.label)<0 || v.label.length!==1){ hard.push('標籤不在集合內 L'+n+'：'+v.label); continue; }
       if(v.label==='S'){
         const ids=v.role.split(/\s*[\/／]\s*/).map(x=>x.trim()).filter(Boolean).map(x=>surfGet(surf,x));
@@ -1567,12 +1567,12 @@ const TSP=(function(){
         else v.role=ids.filter((x,i)=>ids.indexOf(x)===i).join('/');
       }else v.role='';
     }
-    return {hard, soft};
+    return {hard, soft, extra};
   }
   // 回傳錯誤清單（空＝通過）
   function validateLabels(parsed, sentNums, roles){
     const c=checkLabels(parsed, sentNums, roles);
-    return c.hard.concat(c.soft.map(x=>x.msg));
+    return c.hard.concat(c.soft.map(x=>x.msg), c.extra);
   }
 
   // ---------- 本機規則：內嵌指示、日文標記、說話者前綴、場次標題 ----------
