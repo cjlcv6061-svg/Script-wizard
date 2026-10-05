@@ -112,6 +112,9 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   const dc = T.detectPrefix(mk(comma), rl('兄', '妹'));
   eq(dc.candidates.map(c => c[0]).filter(x => /好自由|跟住|無人|hmm|Well/.test(x)), [], '逗號不拆候選稱呼');
   eq(T.detectPrefix(mk(src.concat(['兄、妹：一齊講'])), rl('兄', '妹')).prefixLines, 24 + 1, '「兄、妹：」合說仍然算前綴行');
+  // 結尾帶編號的稱呼（路人1、村民２）認得；開頭是數字的（時間）不是稱呼
+  const numd = src.concat(['路人1：喂', '路人2：你好', '村民２：嗨', '12:30 見面', '3：45 開始']);
+  eq(T.detectPrefix(mk(numd), rl('兄', '妹')).candidates.map(c => c[0]).filter(x => /路人|村民|12|3/.test(x)).sort(), ['村民２', '路人', '路人1', '路人2'], '稱呼結尾可帶編號（路人 是前面 src 裡原有的）；「12:30」「3：45」不是稱呼');
   // 中英混合的稱呼（亞Toy、呂VO、魔老VO）也認得
   const mixed = []; for (let i = 0; i < 14; i++) mixed.push('呂同學：句' + i, '魔老：回' + i);
   mixed.push('亞Toy  ：呀妳要玩具', '亞Toy  ：笑妹妹', '呂VO    ：係呢頭先', '魔老VO：係傳說嚟架', 'VO\t：特別新聞');
@@ -138,10 +141,10 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   const r3 = T.applyRoleVerdicts([{ id: '兄', name: '兄', aliases: [] }, { id: '楊', name: '楊', aliases: [] }, { id: '楊淑華', name: '楊淑華', aliases: [] }], new Map([['楊', { k: 'A', to: '楊淑華' }]]), ['楊']);
   eq(r3.roles.map(r => r.id), ['兄', '楊淑華'], 'A：撤銷自動補進的同名角色，改成別名（不會變成兩個角色）');
   eq(T.applyRoleVerdicts(base, new Map(), []).roles, base, '沒有判斷：維持原狀');
-  // 角色上限 55：超過的 R 不再補進（Worker 單次標記請求最多 60 個角色）
-  const many = Array.from({ length: 54 }, (_, i) => ({ id: '角' + i, name: '角' + i, aliases: [] }));
+  // 角色總數上限 120：超過的 R 不再補進
+  const many = Array.from({ length: 119 }, (_, i) => ({ id: '角' + i, name: '角' + i, aliases: [] }));
   const rr = T.applyRoleVerdicts(many, new Map([['甲', { k: 'R' }], ['乙', { k: 'R' }], ['丙', { k: 'R' }]]), []);
-  eq([rr.roles.length, rr.stats.role], [55, 1], '角色上限 55：只補進第一個，其餘略過');
+  eq([rr.roles.length, rr.stats.role], [120, 1], '角色總數上限 120：只補進第一個，其餘略過');
 }
 
 // ---- 切塊 / 取樣 ----
@@ -550,6 +553,28 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     const v = vs['colon-fw'], ls = T.buildLines({ text: v.text }).lines, mock = makeMock(ls, v.gold, {});
     await T.runPipeline({ lines: ls, callApi: mock.callApi });
     eq(mock.calls.roles, 0, '沒有候選稱呼的劇本：不多一次分類請求');
+  }
+
+  // 大型群戲（70 個說話者）：整份角色清單不受 Worker 單次 60 個的限制；每個標記請求只送這一塊用得到的角色（≤60）
+  {
+    const gold = [];
+    for (let i = 0; i < 40; i++) gold.push('主甲：第' + i + '句', '主乙：第' + i + '句回應');
+    for (let r = 0; r < 70; r++) { gold.push('配角' + r + '：你好呀今天', '配角' + r + '：再見啦明天'); gold.push('主甲：中間插話' + r); }
+    const lines = T.buildLines({ text: gold.join('\n') }).lines;
+    const sentRoles = [];
+    const callApi = async p => {
+      if (p.mode === 'format') return JSON.stringify({ roles: [{ id: '主甲', name: '主甲' }, { id: '主乙', name: '主乙' }], rules: { speaker_pos: 'prefix' } });
+      if (p.mode === 'roles') return p.candidates.map(c => c[0] + '|R|').join('\n');
+      sentRoles.push(p.roles.length);
+      const ids = new Set(p.roles.map(r => r.id));
+      return p.lines.map(([n, text]) => { const w = text.split('：')[0]; return n + (ids.has(w) ? '|S|' + w : '|N|'); }).join('\n');
+    };
+    const r = await T.runPipeline({ lines, callApi, concurrency: 1, chunkSize: 150 });
+    const sl = r.scenes.flatMap(s => s.lines).filter(l => l.s !== undefined);
+    eq(sl.length, gold.length, '70 個配角、全部 ' + gold.length + ' 句台詞都保留（沒有任何一句變成雜訊）');
+    ok(r.roles.length === 72, '角色清單 72 個（兩個主角＋70 個配角），不受 60 個的限制：' + r.roles.length);
+    ok(sentRoles.length > 1 && sentRoles.every(n => n <= 60), '每個標記請求的角色清單都 ≤60：' + sentRoles.join(','));
+    ok(Math.max(...sentRoles) < 72, '大型群戲時每塊只送用得到的角色，不是整份清單');
   }
   // 進度回報
   {

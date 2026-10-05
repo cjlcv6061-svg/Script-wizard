@@ -1712,7 +1712,7 @@ const TSP=(function(){
   // 所以：先數行首前綴（補上模型漏掉的角色），標記完成後再用前綴覆寫模型標錯的行。
   // 角色的顯示名稱無法由文字驗證，不去改它（校正頁可改）。
   const PFX_CJK_CH='[^\\sA-Za-z0-9：:–—（(，。、！？!?"“”「」『』….\\/／&＆]';
-  const PFX_CJK=PFX_CJK_CH+'{1,8}';
+  const PFX_CJK=PFX_CJK_CH+'{1,8}(?:[0-9０-９]{1,2})?';      // 結尾可以帶編號：「路人1」「村民2」（開頭不行，免得把「12:30」當成稱呼）
   const PFX_LAT="[A-Za-z][A-Za-z.'’-]*(?: [A-Za-z][A-Za-z.'’-]*){0,2}";
   // 中英混合的稱呼（「亞Toy」「呂VO」「魔老VO」）：中文與英文字母相連
   const PFX_MIX='(?:'+PFX_CJK_CH+'{1,6}[A-Za-z]{1,8}|[A-Za-z]{1,8}'+PFX_CJK_CH+'{1,6})';
@@ -1844,7 +1844,7 @@ const TSP=(function(){
     }
     return {roles:out, stats:st};
   }
-  const MAX_ROLES=55;       // 角色清單上限（Worker 單次標記請求最多 60 個角色，留一點餘裕）
+  const MAX_ROLES=120;      // 角色清單上限（每個標記請求只送這一塊用得到的角色，最多 60 個，所以總數不受 Worker 的 60 限制）
   const prefixTokens=(text,sep)=>{ const m=pfxMatch(text,sep); return m?m.toks:[]; };
   // 模型標了清單外的角色，但那一行的行首真的寫著這個稱呼 → 是文字裡的次要角色（第一段樣本沒涵蓋到），
   // 補進清單；否則整塊會因為一個沒見過的角色被判失敗。行首沒寫的（模型自己編的）不採納。
@@ -1857,7 +1857,7 @@ const TSP=(function(){
         if(surfGet(surf,part) || roles.length>=MAX_ROLES) continue;
         const id=cleanId(part);
         if(!id || id!==part || !toks.includes(part)) continue;
-        roles.push({id, name:id, aliases:[], gender:'n'}); compactRoles.push({id, name:id, aliases:[]}); surf.set(id,id);
+        roles.push({id, name:id, aliases:[], gender:'n'}); if(compactRoles) compactRoles.push({id, name:id, aliases:[]}); surf.set(id,id);
       }
     }
   }
@@ -1985,7 +1985,7 @@ const TSP=(function(){
     let roleClassify=null;
     if(pm.on && pm.candidates.length && o.classifyRoles!==false){
       prog({stage:'roles'});
-      const known=fmt.roles.filter(r=>!pm.added.includes(r.id)).map(r=>({id:r.id, name:r.name, aliases:r.aliases}));
+      const known=fmt.roles.filter(r=>!pm.added.includes(r.id)).slice(0,60).map(r=>({id:r.id, name:r.name, aliases:r.aliases}));
       let verdicts=null;
       for(let a=0;a<2&&!verdicts;a++){
         try{
@@ -2001,7 +2001,19 @@ const TSP=(function(){
     }
     prog({stage:'format',done:1,total:1,roles:fmt.roles.length});
 
-    const compactRoles=fmt.roles.map(r=>({id:r.id,name:r.name,aliases:r.aliases}));
+    // 標記請求送的角色清單：角色不多就全送；角色很多（大型群戲）時，每一塊只送「這一塊行首用到的角色」加上全劇最常出現的 10 個，
+    // 最多 60 個（Worker 單次請求的上限）。整份的角色清單不受這個限制。
+    const roleFreq=new Map();
+    if(pm.on){ const sf=buildSurfaceMap(fmt.roles); for(const l of lines) for(const t of prefixTokens(l.text,pm.sep)){ const id=surfGet(sf,t); if(id) roleFreq.set(id,(roleFreq.get(id)||0)+1); } }
+    const compact=r=>({id:r.id, name:r.name, aliases:r.aliases});
+    const rolesFor=sent=>{
+      const all=fmt.roles;
+      if(!pm.on || all.length<=40) return all.slice(0,60).map(compact);
+      const sf=buildSurfaceMap(all), here=new Set();
+      for(const l of sent) for(const t of prefixTokens(l.text,pm.sep)){ const id=surfGet(sf,t); if(id) here.add(id); }
+      const top=new Set([...all].sort((a,b)=>(roleFreq.get(b.id)||0)-(roleFreq.get(a.id)||0)).slice(0,10).map(r=>r.id));
+      return all.filter(r=>here.has(r.id)||top.has(r.id)).slice(0,60).map(compact);
+    };
     const chunks=chunkLines(lines, o.chunkSize||300, o.overlap==null?10:o.overlap);
     const labels=new Map(), failed=[], errors=[];
     let done=0, retried=0;
@@ -2015,8 +2027,8 @@ const TSP=(function(){
       let best=null;                       // 問題行 ≤25% 就採用（其餘行照用模型的標記）；超過才重試一次（取較少的），仍超過整塊失敗。
       for(let a=0;a<2 && !best;a++){       // 溫度 0 時重試通常得到同一個答案，所以問題不多時不重試（慢的供應商一次重試要好幾分鐘）
         try{
-          const p=parseLabels(await callApi({mode:'label', lines:wire, roles:compactRoles, rules:fmt.rules}));
-          if(pm.on) adoptRoles(p, textOf, fmt.roles, compactRoles, pm.sep);
+          const p=parseLabels(await callApi({mode:'label', lines:wire, roles:rolesFor(sent), rules:fmt.rules}));
+          if(pm.on) adoptRoles(p, textOf, fmt.roles, null, pm.sep);
           const c=checkLabels(p, nums, fmt.roles), soft=[...new Set(c.soft.map(x=>x.n).filter(n=>coreN.has(n)))];
           if(soft.length<=LIMIT) best={p, soft};
           else{ retried++; errors.push({chunk:ci+1, attempt:a+1, errors:c.soft.slice(0,5).map(x=>x.msg), total:soft.length}); }
