@@ -16,6 +16,7 @@ import os
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import CIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
@@ -92,6 +93,67 @@ def make_pdf(indir, outdir, src, vid, desc, header_fn, footer_fn, per_page=36, f
     save_gold(outdir, vid, desc, d['roles'], gold)
 
 
+# ---- 不內嵌字型、靠預先定義 CMap（Adobe-CNS1／ETen-B5）的繁中 PDF：橫排與直排 ----
+# 真實的繁中劇本 PDF 常是這種；pdf.js 沒帶 cMapUrl 時會把整段中文丟掉（抽出 0 行）。
+# 內容是自寫的通用對話（只用 Big5 能編碼的字）。
+_CN = '一二三四五六七八九'
+
+
+def _cns1_lines():
+    out, n = [], 0
+    for rnd in range(3):                                  # 場次與結尾指示都不重複，避免被當成頁眉頁尾
+        for title, body in [
+            ('客廳', [('D', '', '（兄趴在地上，妹坐在沙發上看電視。）'), ('S', '兄', '兄：好好喔！'), ('S', '妹', '妹：但其實我不太想吃。'),
+                     ('S', '兄', '兄：為什麼？你很討厭耶。'), ('S', '妹', '妹：你又不是不知道我已經吃了很多天，'), ('C', '', '每天都是一樣的東西。'),
+                     ('D', '', '（兄起身走到門邊。）'), ('S', '兄', '兄：那我出去走走。'), ('S', '妹', '妹：路上小心。')]),
+            ('廚房', [('D', '', '（燈亮，妹在整理桌面。）'), ('S', '兄', '兄：我回來了。'), ('S', '妹', '妹：外面怎麼樣？'),
+                     ('S', '兄', '兄：很冷，而且下著雨，我淋得全身都濕了，'), ('C', '', '還差點被車撞到。'), ('S', '妹', '妹：下次記得帶傘。'),
+                     ('D', '', '（兩人沉默。）'), ('S', '兄', '兄：好。'), ('S', '妹', '妹：晚安。')]),
+            ('房間', [('D', '', '（黑暗中傳來腳步聲。）'), ('S', '妹', '妹：你還沒睡嗎？'), ('S', '兄', '兄：睡不著。'),
+                     ('S', '妹', '妹：那我們聊聊天吧。'), ('S', '兄', '兄：好啊。')]),
+        ]:
+            n += 1
+            out.append(('H', '', '第%s場　%s' % (_CN[n - 1], title)))
+            out.extend(body)
+            out.append(('D', '', '（第%s段結束。）' % _CN[n - 1]))
+    return out
+
+
+CNS1_LINES = _cns1_lines()
+
+
+def make_cns1_pdf(outdir, vertical, per_page=24):
+    if any(True for _, _, t in CNS1_LINES if t.encode('big5') is None):
+        raise SystemExit('big5')
+    face = 'MSung-Light-ETenms-B5-' + ('V' if vertical else 'H')
+    pdfmetrics.registerFont(CIDFont('MSung-Light', 'ETenms-B5-' + ('V' if vertical else 'H')))
+    enc = lambda t: t.encode('big5').decode('latin-1')
+    vid = 'pdf-cns1-' + ('v' if vertical else 'h')
+    c = canvas.Canvas(os.path.join(outdir, vid + '.pdf'), pagesize=(612, 792))
+    gold = []
+    pages = [CNS1_LINES[i:i + per_page] for i in range(0, len(CNS1_LINES), per_page)]
+    for pi, rows in enumerate(pages, 1):
+        if vertical:
+            c.setFont(face, 14)
+            x = 560
+            for lab, role, t in rows:                      # 每個欄位一行，欄由右到左
+                c.drawString(x, 720, enc(t)); x -= 22
+                gold.append({'text': t, 'label': lab, 'role': role})
+            c.setFont(face, 9); c.drawString(40, 60, enc('第 %d 頁' % pi))   # 頁尾頁碼（橫排）
+            gold.append({'text': '第 %d 頁' % pi, 'label': 'N', 'role': ''})
+        else:
+            c.setFont(face, 9); c.drawString(60, 760, enc('通用示範劇本')); gold.append({'text': '通用示範劇本', 'label': 'N', 'role': ''})
+            c.setFont(face, 12); y = 720
+            for lab, role, t in rows:
+                c.drawString(60, y, enc(t)); y -= 22
+                gold.append({'text': t, 'label': lab, 'role': role})
+            c.setFont(face, 9); c.drawString(290, 40, enc('第 %d 頁' % pi)); gold.append({'text': '第 %d 頁' % pi, 'label': 'N', 'role': ''})
+        c.showPage()
+    c.save()
+    save_gold(outdir, vid, 'PDF：不內嵌字型的繁中（ETen-B5）' + ('直排，欄由右到左' if vertical else '橫排'),
+              [{'id': '兄', 'name': '兄'}, {'id': '妹', 'name': '妹'}], gold)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('indir', nargs='?', default='eval/out/synth')
@@ -108,6 +170,8 @@ def main():
              lambda p: '《離地，到着》· 單數頁' if p % 2 else '劇本草稿 v3 · 雙數頁', lambda p: '第 %d 頁' % p, font=a.font)
     make_pdf(a.indir, a.outdir, 'noisy', 'pdf-messy', 'PDF：封面、目錄、內文頁碼雜訊再加頁眉頁尾',
              lambda p: '《離地，到着》機密　內部排練用', lambda p: 'Page %d of 99' % p, per_page=40, font=a.font)
+    make_cns1_pdf(a.outdir, False)
+    make_cns1_pdf(a.outdir, True)
     print('已輸出到', a.outdir, sorted(os.listdir(a.outdir)))
 
 

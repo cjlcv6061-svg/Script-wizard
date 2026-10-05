@@ -1290,10 +1290,37 @@ const TSP=(function(){
   // 看起來是台詞的行（角色名＋冒號）：不當頁眉頁尾刪除
   const DIALOGUE_LIKE=/^[^\s：:（(]{1,10}[（(]?[^）)：:]{0,12}[）)]?[：:]\S/;
 
-  // 把一頁的 pdf.js 文字項目（含座標）組成行。items: [{str, transform:[a,b,c,d,x,y], width, height}]
+  // 把一頁的 pdf.js 文字項目（含座標）組成行。items: [{str, dir?, transform:[a,b,c,d,x,y], width, height}]
+  // 橫排：依 y 由上到下、x 由左到右。直排（繁中劇本常見）：每一欄是一行，欄由右到左、欄內由上到下；
+  // 直排版面的字間空白是排版產物（對齊／字距），夾在兩個中日文字之間的一律去掉。
+  const CJK_C='一-鿿㐀-䶿豈-﫿　-〿＀-￯︰-﹏぀-ヿ';
+  // 直排專用的標點字形（︵︶︽︾﹁﹂︙…）還原成一般標點，後面的指示／括號規則才認得
+  const VERT_FORMS=/[︐-︙︰-﹏]/g;
+  const VERT_MAP={'︵':'（','︶':'）','︷':'｛','︸':'｝','︹':'〔','︺':'〕','︻':'【','︼':'】','︽':'《','︾':'》','︿':'〈','﹀':'〉','﹁':'「','﹂':'」','﹃':'『','﹄':'』','︙':'…','︱':'—','︰':'：'};
+  const fromVert=c=>VERT_MAP[c]||c.normalize('NFKC');
+  const CJK_GAP=new RegExp('(?<=['+CJK_C+'])[ \\t]+(?=['+CJK_C+'])','g');
   function itemsToLines(items){
     const its=items.filter(it=>it && typeof it.str==='string' && it.transform)
-      .map(it=>({str:it.str, x:it.transform[4], y:it.transform[5], fs:Math.abs(it.transform[0])||it.height||10, w:it.width||0}));
+      .map(it=>({str:it.str.replace(VERT_FORMS,fromVert), x:it.transform[4], y:it.transform[5], fs:Math.abs(it.transform[0])||Math.abs(it.transform[2])||it.height||10, w:it.width||0, h:it.height||0, dir:it.dir}));
+    let vChars=0, allChars=0;
+    for(const it of its){ const n=it.str.replace(/\s/g,'').length; allChars+=n; if(it.dir==='ttb') vChars+=n; }
+    const vertical=allChars>0 && vChars/allChars>0.5;
+    const out=[];
+    if(vertical){
+      its.sort((a,b)=>b.x-a.x);
+      const cols=[];
+      for(const it of its){
+        const last=cols[cols.length-1];
+        const tol=Math.max(3,it.fs*0.55);
+        if(last && Math.abs(last.x-it.x)<=tol) last.items.push(it); else cols.push({x:it.x, items:[it]});
+      }
+      for(const c of cols){
+        c.items.sort((a,b)=>b.y-a.y);
+        const s=c.items.map(i=>i.str).join('').replace(CJK_GAP,'').replace(/^\s+|\s+$/g,'');
+        if(s) out.push(s);
+      }
+      return out;
+    }
     its.sort((a,b)=> (b.y-a.y) || (a.x-b.x));
     const rows=[];
     for(const it of its){
@@ -1302,7 +1329,6 @@ const TSP=(function(){
       if(last && Math.abs(last.y-it.y)<=tol){ last.items.push(it); }
       else rows.push({y:it.y, items:[it]});
     }
-    const out=[];
     for(const r of rows){
       r.items.sort((a,b)=>a.x-b.x);
       let s='', prev=null;
@@ -1506,8 +1532,10 @@ const TSP=(function(){
     for(const r of roles) if(!m.has(r.id)) m.set(r.id,r.id);
     for(const r of roles) if(r.name && !m.has(r.name)) m.set(r.name,r.id);
     for(const r of roles) for(const a of (r.aliases||[])) if(a && !m.has(a)) m.set(a,r.id);
+    for(const [k,v] of [...m]) { const lk=k.toLowerCase(); if(lk!==k && !m.has(lk)) m.set(lk,v); }   // 英文名大小寫不拘（MADISON／Madison）
     return m;
   }
+  const surfGet=(surf,x)=>surf.get(x)||surf.get(String(x).toLowerCase());
   // 第二段回應（逐行「行號|標籤|角色」）→ {map:Map(n→{label,role}), dup:[n], bad:[行]}
   function parseLabels(text){
     const map=new Map(), dup=[], bad=[];
@@ -1532,7 +1560,7 @@ const TSP=(function(){
       if(!sent.has(n)){ errors.push('多出 L'+n); continue; }
       if('SCDHN'.indexOf(v.label)<0 || v.label.length!==1){ errors.push('標籤不在集合內 L'+n+'：'+v.label); continue; }
       if(v.label==='S'){
-        const ids=v.role.split(/\s*[\/／]\s*/).map(x=>x.trim()).filter(Boolean).map(x=>surf.get(x));
+        const ids=v.role.split(/\s*[\/／]\s*/).map(x=>x.trim()).filter(Boolean).map(x=>surfGet(surf,x));
         if(!ids.length || ids.some(x=>!x)) errors.push('角色不在清單內 L'+n+'：'+v.role);
         else v.role=ids.filter((x,i)=>ids.indexOf(x)===i).join('/');
       }else v.role='';
@@ -1545,7 +1573,9 @@ const TSP=(function(){
   // 規格 4：台詞中的（…）／(…) 從 t 移除；有移除時 r 保留含指示的原文
   function stripDirections(text){
     let t=text, had=false, prev;
-    do{ prev=t; t=t.replace(PAREN_RE,()=>{had=true; return '';}); }while(t!==prev);
+    // 夾在兩個中日文字之間的指示：連同兩側的空白一起拿掉，免得留下多餘空白
+    const between=new RegExp('(?<=['+CJK_C+'])[ \\t　]*[（(][^（）()]*[）)][ \\t　]*(?=['+CJK_C+'])','g');
+    do{ prev=t; t=t.replace(between,()=>{had=true; return '';}).replace(PAREN_RE,()=>{had=true; return '';}); }while(t!==prev);
     if(had) t=t.replace(/[ \t　]{2,}/g,' ').trim();
     return {t, had};
   }
@@ -1597,19 +1627,20 @@ const TSP=(function(){
     return out+a.slice(pos).join('');
   }
 
-  // 說話者前綴：「偉：…」「偉（低聲）：…」「偉、朗：…」「Kumi: …」。
-  // 前綴每個稱呼都必須是已知角色稱呼才剝除，避免把台詞裡的冒號當成前綴。
-  const SPK_SEP=/[、,，\/／&＆和與及]/;
+  // 說話者前綴：「偉：…」「偉（低聲）：…」「偉、朗：…」「Kumi: …」「Madison (yelling) – No!」（冒號或破折號）。
+  // 前綴每個稱呼都必須是已知角色稱呼才剝除，避免把台詞裡的冒號或破折號當成前綴。
+  const SPK_SEP=/[、,，\/／&＆和與及]|\s+and\s+/i;
   function splitSpeakerPrefix(text, surf){
-    const m=text.match(/^([^：:]{1,40}?)\s*[：:]\s*/);
+    const m=text.match(/^([^：:–—]{1,40}?)\s*(?:[：:]\s*|\s[–—-]\s+|[–—]\s*)/);
     if(m){
       let dirs='';
       const name=m[1].replace(/[（(][^）)]*[）)]/g,d=>{ dirs+=d; return ''; }).trim();
       const toks=name.split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
-      if(toks.length && toks.every(x=>surf.has(x))) return {rest:text.slice(m[0].length), pre:m[0], dir:dirs, ids:toks.map(x=>surf.get(x))};
+      if(toks.length && toks.every(x=>surfGet(surf,x))) return {rest:text.slice(m[0].length), pre:m[0], dir:dirs, ids:toks.map(x=>surfGet(surf,x))};
     }
     return null;
   }
+
   // 場次標題 → {no,name,season,place}（啟發式；使用者可在校正頁修正）
   const SCENE_NO_RE=/^(序場|序幕|序章|楔子|尾聲|終場|終幕|第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節]|(?:scene|act)\s*[0-9ivx]+)/i;
   const SEASON_RE=/^[『「（(【\[][^』」）)】\]]{1,6}[』」）)】\]]$/;
@@ -1627,14 +1658,17 @@ const TSP=(function(){
   }
 
   // ---------- 啟發式標記（不靠 LLM）：LLM 整塊失敗時的後備，也是評測的基準線 ----------
+  const TERMINAL_RE=/[.!?。！？…”"」』)）]\s*$/;
   function heuristicLabels(lines, roles, flag){
     const surf=buildSurfaceMap(roles);
     const names=[...surf.keys()].sort((a,b)=>b.length-a.length);
     const map=new Map();
-    let pending=null, prev='N';
+    // 一般折行寬度：全部行長度的第 90 百分位。段落末行（句末標點收尾且明顯比這短）之後才是新的一段
+    const lens=lines.map(l=>l.text.length).sort((a,b)=>a-b), fullW=lens.length?lens[Math.floor(lens.length*0.9)]:0;
+    let pending=null, prev='N', prevText='';
     const put=(n,label,role)=>{ const v={label,role:role||''}; if(flag) v.rv=true; map.set(n,v); prev=label; };
     for(const L of lines){
-      const t=L.text;
+      const t=L.text; const _pt=prevText; prevText=t;
       if(SCENE_NO_RE.test(t.replace(/^[=＝\-—\s　*#]+/,'')) && t.length<=60){ put(L.n,'H'); pending=null; continue; }
       if(isPageNumberLine(t,false) || /^[-–—~]\s*[0-9０-９]{1,4}\s*[-–—~]$/.test(t)){ put(L.n,'N'); continue; }
       const sp=splitSpeakerPrefix(t,surf);
@@ -1642,15 +1676,17 @@ const TSP=(function(){
       if(/^[（(].*[）)]$/.test(t)){ put(L.n,'D'); continue; }
       // 獨立角色名行（整行就是角色稱呼，可含分隔符）
       const toks=t.replace(/[（(][^）)]*[）)]/g,'').split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
-      if(toks.length && toks.every(x=>surf.has(x)) && t.length<=24){ pending=toks.map(x=>surf.get(x)).filter((x,i,ar)=>ar.indexOf(x)===i).join('/'); put(L.n,'N'); continue; }
+      if(toks.length && toks.every(x=>surfGet(surf,x)) && t.length<=24){ pending=toks.map(x=>surfGet(surf,x)).filter((x,i,ar)=>ar.indexOf(x)===i).join('/'); put(L.n,'N'); continue; }
       if(pending){ put(L.n,'S',pending); pending=null; continue; }
-      put(L.n, (prev==='S'||prev==='C')?'C':'D');
+      // 沒有角色名的行：接在台詞後面、且上一行沒有以句末標點收尾 → 折行續行；否則視為新的一段（舞台指示）
+      put(L.n, ((prev==='S'||prev==='C') && !(TERMINAL_RE.test(_pt) && _pt.length<fullW*0.8))?'C':'D');
     }
     return map;
   }
 
   // ---------- 組回（規格 5.3）：依行號，C 併入前一個 S，H 開新場景，N 丟棄（保留為 {x}）----------
-  const joinParts=(a,b)=>!a?b:(/[A-Za-z0-9]$/.test(a)&&/^[A-Za-z0-9]/.test(b))?a+' '+b:a+b;
+  // 折行接回：兩邊都是半形字元（英文等）時補一個空白；中文不補
+  const joinParts=(a,b)=>!a?b:(/[!-~]$/.test(a)&&/^[!-~]/.test(b))?a+' '+b:a+b;
   function assemble(lines, labels, roles){
     const surf=buildSurfaceMap(roles), roleIds=roles.map(r=>r.id);
     const scenes=[], stats={S:0,C:0,D:0,H:0,N:0,orphanC:0,review:0};
@@ -1770,7 +1806,7 @@ const TSE=(function(){
   const kindOf=l=>l.d!==undefined?'D':l.x!==undefined?'X':'S';
   // 編輯框顯示的完整文字：台詞用含指示的原文 r（沒有就用 t），指示／雜訊用原文
   const fullText=l=>l.d!==undefined?l.d:l.x!==undefined?l.x:(l.r!==undefined?l.r:l.t);
-  const joinText=(a,b)=>!a?b:(/[A-Za-z0-9]$/.test(a)&&/^[A-Za-z0-9]/.test(b))?a+' '+b:a+b;
+  const joinText=(a,b)=>!a?b:(/[!-~]$/.test(a)&&/^[!-~]/.test(b))?a+' '+b:a+b;
   const cleanId=x=>String(x==null?'':x).trim().replace(/[<>&"'\/]/g,'');
 
   // 由種類／角色／文字建出一行。S 的文字依規格 4 重新拆成 t（去指示）與 r（含指示原文）；
@@ -3391,7 +3427,8 @@ async function extractPdf(buf){
   await loadLib('vendor/pdf.min.js');
   const lib=window.pdfjsLib;
   lib.GlobalWorkerOptions.workerSrc='vendor/pdf.worker.min.js';
-  const doc=await lib.getDocument({data:new Uint8Array(buf), isEvalSupported:false}).promise;
+  // cMapUrl：中文 PDF 常用預先定義的字元對照表（Adobe-CNS1 等），沒有它 pdf.js 會把整段中文丟掉
+  const doc=await lib.getDocument({data:new Uint8Array(buf), isEvalSupported:false, cMapUrl:'vendor/cmaps/', cMapPacked:true}).promise;
   const pages=[];
   for(let p=1;p<=doc.numPages;p++){
     const page=await doc.getPage(p);
@@ -3435,7 +3472,7 @@ function setAddStatus(msg, bad){ addStatus.textContent=msg||''; addStatus.classL
 async function prepareSource(input, defaultTitle){
   // input: {kind, text} 或 {kind, pages}
   const r=TSP.buildLines(input.pages?{pages:input.pages}:{text:input.text});
-  if(input.pages && r.scanned) throw new Error('這是掃描檔（抽不出文字），暫不支援。請改用 Word 檔，或把文字複製貼上。');
+  if(input.pages && r.scanned) throw new Error('這份 PDF 抽不出文字（可能是掃描檔／圖片，或字型資料損毀），暫不支援。請改用 Word 檔，或把文字複製貼上。');
   if(!r.lines.length) throw new Error('沒有讀到任何文字');
   const hash=await sha256Hex(r.lines.map(l=>l.text).join('\n'));
   SRC={kind:input.kind, title:defaultTitle||'', lines:r.lines, removed:r.removed, hash, stats:r.stats};

@@ -48,6 +48,8 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   eq(T.stripDirections('影完！(Kumi 拿着叉等待着。)'), { t: '影完！', had: true }, '結尾半形指示');
   eq(T.stripDirections('哦…（擺了另一個 post）咁？'), { t: '哦…咁？', had: true }, '中間指示');
   eq(T.stripDirections('甲（乙（丙）丁）戊'), { t: '甲戊', had: true }, '巢狀括號');
+  eq(T.stripDirections('我想吃牛排。( 頓 ) 你跟麻出去'), { t: '我想吃牛排。你跟麻出去', had: true }, '夾在中文之間的指示連同空白一起拿掉');
+  eq(T.stripDirections('Hello (waves) world'), { t: 'Hello world', had: true }, '英文指示兩側只留一個空白');
   eq(T.stripDirections('冇指示嘅台詞'), { t: '冇指示嘅台詞', had: false }, '沒有指示');
 
   // 日文標記：以《離地》既有標記校準
@@ -71,6 +73,13 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   eq(T.splitSpeakerPrefix('偉、朗：好呀', surf).ids, ['偉', '朗'], '合說');
   eq(T.splitSpeakerPrefix('我同你講：你好', surf), null, '台詞裡的冒號不當前綴');
   eq(T.splitSpeakerPrefix('12:30 見', surf), null, '時間不當前綴');
+  const en = T.buildSurfaceMap([{ id: 'Madison', name: 'Madison', aliases: [] }, { id: 'Alexandre', name: 'Alexandre', aliases: [] }]);
+  eq(T.splitSpeakerPrefix('Madison (yelling) – No!', en), { rest: 'No!', pre: 'Madison (yelling) – ', dir: '(yelling)', ids: ['Madison'] }, '英文：角色名＋指示＋破折號');
+  eq(T.splitSpeakerPrefix('Alexandre – Hands up!', en).ids, ['Alexandre'], '破折號');
+  eq(T.splitSpeakerPrefix('ALEXANDRE: Hi', en).ids, ['Alexandre'], '大小寫不拘');
+  eq(T.splitSpeakerPrefix('Madison and Alexandre – Yes', en).ids, ['Madison', 'Alexandre'], 'and 連接的合說');
+  eq(T.splitSpeakerPrefix('The window – across the courtyard', en), null, '不是角色的破折號不當前綴');
+  eq(T.splitSpeakerPrefix('Madison is here – really', en), null, '句中的破折號不當前綴');
 
   // 場次標題：原劇本 22 場全部還原
   const bad = [];
@@ -112,6 +121,8 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   eq(ls[2], { s: '偉', t: '你好，再見' }, '續行併入，中間夾的雜訊不影響');
   eq(ls[3], { x: '- 3 -' }, '雜訊保留為 x（校正頁可還原）');
   eq(ls[4], { s: 'K', t: 'Hello world' }, '英文續行補空白');
+  const rj = T.assemble([L(1, 'Alexandre – value here,'), L(2, 'believe me.')], lab([1, 'S', 'Alexandre'], [2, 'C']), [{ id: 'Alexandre', name: 'Alexandre', aliases: [] }]);
+  eq(rj.scenes[0].lines[0], { s: 'Alexandre', t: 'value here, believe me.' }, '標點結尾的英文續行也補空白，且剝掉破折號前綴');
   eq(r.stats.orphanC, 1, '統計孤兒續行');
   // 無標題：全部進單一場景
   const r2 = T.assemble([L(1, '偉：甲'), L(2, '朗：乙')], lab([1, 'S', '偉'], [2, 'S', '朗']), roles);

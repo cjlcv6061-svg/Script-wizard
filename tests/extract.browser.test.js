@@ -21,7 +21,7 @@ const exe = findChromium();
 if (!exe) { console.log('- extract.browser：略過（找不到 Chromium）'); process.exit(0); }
 
 const SYN = path.join(ROOT, 'eval/out/synth'), DOCS = path.join(ROOT, 'eval/out/docs');
-if (!fs.existsSync(path.join(DOCS, 'pdf-wrapped.pdf'))) {
+if (!fs.existsSync(path.join(DOCS, 'pdf-wrapped.pdf')) || !fs.existsSync(path.join(DOCS, 'pdf-cns1-v.pdf'))) {
   try {
     execFileSync(process.execPath, [path.join(ROOT, 'eval/synth.js'), SYN], { stdio: 'pipe' });
     execFileSync('python3', [path.join(ROOT, 'eval/build_docs.py'), SYN, DOCS], { stdio: 'pipe', cwd: ROOT });
@@ -57,7 +57,7 @@ const ok = (c, m) => { assert(c, m); n++; };
 
   // ---- 檔案：與標準答案對齊 ----
   const report = [];
-  for (const id of ['docx-colon', 'docx-centered', 'pdf-wrapped', 'pdf-centered', 'pdf-messy']) {
+  for (const id of ['docx-colon', 'docx-centered', 'pdf-wrapped', 'pdf-centered', 'pdf-messy', 'pdf-cns1-h', 'pdf-cns1-v']) {
     const file = path.join(DOCS, id + (id.startsWith('pdf') ? '.pdf' : '.docx'));
     const gold = JSON.parse(fs.readFileSync(path.join(DOCS, id + '.gold.json'), 'utf8')).gold;
     const page = await fresh();
@@ -76,6 +76,10 @@ const ok = (c, m) => { assert(c, m); n++; };
     report.push(`${id.padEnd(14)} 行數 ${String(src.lines.length).padStart(4)}／答案 ${gold.length}  內容涵蓋 ${(cover * 100).toFixed(2)}%  多餘行 ${extra}  移除頁眉頁尾 ${src.removed.length}  殘留頁碼行 ${pageNoLeft}`);
     ok(cover >= 0.995, `${id}：內容涵蓋率 ${(cover * 100).toFixed(2)}% 應 ≥ 99.5%`);
     ok(extra <= 3, `${id}：不應多出行（${extra}）`);
+    if (id.startsWith('pdf-cns1')) {
+      ok(src.lines.length >= 70, `${id}：不內嵌字型的繁中 PDF 要能抽出文字（${src.lines.length} 行；沒有 CMap 會是 0 行）`);
+      ok(pageNoLeft === 0 && src.removed.length >= 3, `${id}：頁眉頁尾／頁碼已移除（${src.removed.length}）`);
+    }
     if (id === 'pdf-wrapped' || id === 'pdf-centered') {
       ok(pageNoLeft === 0, `${id}：頁碼殘留應為 0（${pageNoLeft}）`);
       ok(src.removed.length >= 2 * 15, `${id}：頁眉頁尾被移除（${src.removed.length}）`);
@@ -113,8 +117,8 @@ const ok = (c, m) => { assert(c, m); n++; };
 from reportlab.pdfgen import canvas
 c=canvas.Canvas(${JSON.stringify(path.join(tmp, 'scan.pdf'))}); c.rect(50,50,300,300,fill=1); c.showPage(); c.rect(60,60,200,200,fill=1); c.save()`]);
     await page.setInputFiles('#addFile', path.join(tmp, 'scan.pdf'));
-    await page.waitForFunction(() => document.getElementById('addStatus').classList.contains('bad') && /掃描檔/.test(document.getElementById('addStatus').textContent), null, { timeout: 30000 });
-    ok(true, '掃描 PDF 提示「這是掃描檔」');
+    await page.waitForFunction(() => document.getElementById('addStatus').classList.contains('bad') && /抽不出文字/.test(document.getElementById('addStatus').textContent), null, { timeout: 30000 });
+    ok(true, '圖片 PDF 提示「抽不出文字」');
     await page.context().close();
   }
   await browser.close();

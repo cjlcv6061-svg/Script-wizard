@@ -8,7 +8,8 @@ async function extractDocx(file) {
 }
 async function extractPdf(file, TSP) {
   const pdfjs = require('pdfjs-dist/legacy/build/pdf.js');
-  const doc = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(file)), isEvalSupported: false, useSystemFonts: false, verbosity: 0 }).promise;
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(file)), isEvalSupported: false, useSystemFonts: false, verbosity: 0,
+    cMapUrl: require('path').join(__dirname, '../../vendor/cmaps/'), cMapPacked: true }).promise;
   const pages = [];
   for (let p = 1; p <= doc.numPages; p++) {
     const tc = await (await doc.getPage(p)).getTextContent();
