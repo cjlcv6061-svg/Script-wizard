@@ -3806,6 +3806,7 @@ async function runParse(){
     if(!result){
       result=await TSP.runPipeline({
         lines:src.lines, callApi:workerCall, concurrency:3, retryDelays:retryDelays(),
+        chunkSize:150,      // 小模型一次標 300 行常失控（回傳被截斷或格式壞掉）且很慢；150 行實測穩定而且快得多
         onProgress:p=>{
           if(!live()) return;
           if(p.stage==='retry'){ document.getElementById('parseDetail').textContent='AI 服務暫時忙碌，'+Math.round(p.wait/1000)+' 秒後自動重試（第 '+p.attempt+'／'+p.of+' 次）…'; return; }

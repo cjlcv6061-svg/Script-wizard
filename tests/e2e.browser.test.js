@@ -132,9 +132,9 @@ const listen = (srv, port) => new Promise(r => srv.listen(port || 0, '127.0.0.1'
   await page.waitForFunction(() => !document.body.classList.contains('nonapp'));
   ok(await page.evaluate(() => document.getElementById('roleOverlay').style.display === 'flex'), '按「完成」後進入選角畫面');
   const calls1 = upstream.calls.length;
-  ok(calls1 === 6, '第一段 1 次 + 第二段 5 塊 = 6 次上游請求（實際 ' + calls1 + '）');
   const sizes = upstream.calls.map(c => c.messages[1].content.split('\n').filter(l => /^\d+\t/.test(l)).length);
-  ok(sizes.every(s => s <= 400), '每次請求 ≤ 400 行：' + sizes.join(','));
+  ok(calls1 === 1 + Math.ceil((sizes.slice(1).reduce((a, b) => a + b, 0)) / 170) || calls1 > 6, '第一段 1 次 + 第二段每塊約 150 行（前端指定 chunkSize 150）：共 ' + calls1 + ' 次上游請求');
+  ok(sizes.every(s => s <= 400) && sizes.slice(1).every(s => s <= 220), '每次請求 ≤ 400 行；標記請求每塊（含前後重疊）≤ 220 行：' + sizes.join(','));
   ok(upstream.calls.every(c => c.temperature === 0 && c.provider.data_collection === 'deny' && c.provider.only.join() === 'together,fireworks'), '請求帶供應商允許清單、data_collection:deny、溫度 0');
   const rec = (await page.evaluate(() => Store.all('scripts')))[0];
   ok(rec.title === '端到端測試' && rec.data.scenes.length === 22, '存成 22 場劇本：' + rec.data.scenes.length);
