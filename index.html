@@ -1738,7 +1738,17 @@ const TSP=(function(){
     let prefixLines=0; for(const l of lines){ const ts=parts(l); if(ts.length && ts.every(isRole)) prefixLines++; }
     if(prefixLines<Math.max(10,Math.ceil(body*0.25))) return {on:false, prefixLines};
     const toks=[...cnt].filter(([t])=>isRole(t));
-    const out=roles.map(r=>Object.assign({},r)), added=[];
+    const out=roles.map(r=>Object.assign({},r,{aliases:(r.aliases||[]).slice()})), added=[];
+    // 模型的 id 在文字裡沒有任何依據，但它的名稱／別名正是行首前綴（例：id「眉」、別名「妹」，文字寫「妹：」），
+    // 而且兩者毫無關係（不是全名與簡稱的關係）→ 以前綴為準，舊 id 降為別名。這樣送去標記的角色清單本身就是對的。
+    for(const r of out){
+      if(cnt.has(r.id)) continue;
+      const t=[r.name].concat(r.aliases).find(x=>x && cnt.has(x) && !x.includes(r.id) && !r.id.includes(x) && !out.some(o=>o!==r && o.id===x));
+      if(!t) continue;
+      r.aliases=[r.id].concat(r.aliases.filter(a=>a!==t && a!==r.id));
+      if(r.name===r.id) r.name=t;
+      r.id=t;
+    }
     const surf2=buildSurfaceMap(out);
     for(const [t] of toks){
       if(surfGet(surf2,t)) continue;
@@ -1791,14 +1801,19 @@ const TSP=(function(){
   // 前綴格式劇本的角色清單整理（在 applyPrefix 之後）：沒有任何台詞的角色（模型編的）不留；
   // 名稱／別名若在整份原文裡一次都沒出現過（或只有單一個字，必然出現過、不算依據），就是沒有依據的（例如範例裡的虛構姓氏），名稱改回 id、別名丟掉。
   function tidyRoles(lines, labels, roles){
-    const used=new Set(), hay=lines.map(l=>l.text).join('\n').toLowerCase(), dropped=[], renamed=[];
-    for(const l of lines){ const v=labels.get(l.n); if(v && v.label==='S') for(const x of v.role.split('/')) used.add(x); }
+    const used=new Set(), hay=lines.map(l=>l.text).join('\n').toLowerCase(), dropped=[], renamed=[], ptok=new Set();
+    for(const l of lines){
+      const v=labels.get(l.n); if(v && v.label==='S') for(const x of v.role.split('/')) used.add(x);
+      for(const t of prefixTokens(l.text)) ptok.add(t.toLowerCase());
+    }
+    // 有依據＝本身就是行首前綴，或長度 ≥2 且在原文出現過（單字在原文裡必然出現過，不算依據）
+    const supported=x=>{ x=String(x||'').toLowerCase(); return !!x && (ptok.has(x) || (x.length>=2 && hay.includes(x))); };
     const out=[];
     for(const r of roles){
       if(!used.has(r.id)){ dropped.push(r.id); continue; }
-      const keep=r.name===r.id || (r.name.length>=2 && hay.includes(r.name.toLowerCase()));     // 單字的名稱在原文裡必然出現過，不算證據
+      const keep=r.name===r.id || supported(r.name);
       if(!keep) renamed.push(r.id);
-      out.push(Object.assign({}, r, {name:keep?r.name:r.id, aliases:(r.aliases||[]).filter(a=>hay.includes(String(a).toLowerCase()))}));
+      out.push(Object.assign({}, r, {name:keep?r.name:r.id, aliases:(r.aliases||[]).filter(supported)}));
     }
     return {roles:out.length?out:roles, dropped, renamed};
   }

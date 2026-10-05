@@ -163,6 +163,16 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   const d1 = T.detectPrefix(mk(zh), rl('兄', '妹'));
   ok(d1.on && d1.added.join() === '媽' && d1.roles.map(r => r.id).join() === '兄,妹,媽', '前綴格式：補上模型漏掉的角色');
   ok(d1.prefixLines === 23, '前綴行數（合說算一行）：' + d1.prefixLines);
+  // 模型的 id 沒有依據、別名卻是行首前綴（真實 dogshouse：id「眉」、別名「妹」，文字寫「妹：」）→ 以前綴為準
+  {
+    const rr = [{ id: '格', name: '陳立格', aliases: ['格子'], gender: 'm' }, { id: '眉', name: '陳立眉', aliases: ['眉', '妹'], gender: 'f' }];
+    const d = T.detectPrefix(mk(zh), rr);
+    eq(d.roles.map(r => [r.id, r.gender]), [['格', 'm'], ['妹', 'f'], ['兄', 'n'], ['媽', 'n']], '無依據的 id 換成前綴（妹），補上沒列出的角色（兄、媽）');
+    eq(d.roles[1].aliases, ['眉'], '舊 id 降為別名');
+    // 全名與簡稱的關係（id「偉」、前綴「葉志偉」）是正常的，不動
+    const zz = []; for (let i = 0; i < 12; i++) zz.push('葉志偉：甲' + i, '朗：乙' + i);
+    eq(T.detectPrefix(mk(zz), [{ id: '偉', name: '葉志偉', aliases: [] }, { id: '朗', name: '朗', aliases: [] }]).roles.map(r => r.id), ['偉', '朗'], '全名／簡稱：id 不動');
+  }
   // 太少見的稱呼（3 次）不補成角色
   eq(T.detectPrefix(mk(zh.filter(x => !/^媽：丙[345]/.test(x))), rl('兄', '妹')).added, [], '只出現 3 次的稱呼不補成角色');
   // 英文破折號格式：偶然出現的「Well – 」不當角色；網址不當角色
@@ -213,6 +223,9 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     const lab = new Map([[1, { label: 'S', role: '兄' }], [2, { label: 'S', role: '妹' }], [3, { label: 'D', role: '' }]]);
     const t = T.tidyRoles(lines2, lab, [{ id: '兄', name: '葉志偉', aliases: ['志偉', '大哥'] }, { id: '妹', name: '陳立妹', aliases: [] }, { id: '麻', name: '麻', aliases: [] }]);
     eq(t.roles.map(r => [r.id, r.name, r.aliases]), [['兄', '葉志偉', ['志偉']], ['妹', '妹', []]], '原文出現過的名稱／別名保留，沒出現過的丟掉；沒有台詞的角色不留');
+    // 單字名稱：本身是行首前綴才算有依據
+    const t2 = T.tidyRoles(mk(['妹：嗨', '兄：好']), new Map([[1, { label: 'S', role: '眉' }], [2, { label: 'S', role: '兄' }]]), [{ id: '眉', name: '妹', aliases: ['妹'] }, { id: '兄', name: '格', aliases: [] }]);
+    eq(t2.roles.map(r => [r.id, r.name, r.aliases]), [['眉', '妹', ['妹']], ['兄', '兄', []]], '單字名稱：是行首前綴（妹）就保留，否則（格）改回 id');
     eq([t.dropped, t.renamed], [['麻'], ['妹']], '回報移除與改名');
   }
   // 「（指示）角色名：」常見寫法不算夾帶前綴，也不被強制改標
