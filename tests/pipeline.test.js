@@ -37,6 +37,7 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
 {
   const f = T.parseFormat('```json\n{"roles":[{"id":"朗/x","name":"陳立朗","aliases":["立朗","朗","立朗"],"gender":"m"},{"id":"朗x"},{"id":""}],"rules":{"speaker_pos":"prefix"}}\n```');
   eq(f.roles.map(r => r.id), ['朗x'], '角色 id 去掉非法字元；撞名者丟棄');
+  eq(T.parseFormat('{"roles":[{"id":"Madison","name":"Madison","aliases":["Madison –","Madison:","—","Mad"]}],"rules":{}}').roles[0].aliases, ['Mad'], '別名連尾端的冒號／破折號一起寫時去掉，剩空字串的丟掉');
   let threw = 0;
   for (const bad of ['not json', '{"roles":[]}', '{"x":1}']) { try { T.parseFormat(bad); } catch (e) { threw++; } }
   eq(threw, 3, '壞格式丟錯');

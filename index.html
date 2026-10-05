@@ -1519,7 +1519,7 @@ const TSP=(function(){
       const id=cleanId(r.id);
       if(!id || seen.has(id)) continue;
       seen.add(id);
-      const aliases=[]; for(const a of (Array.isArray(r.aliases)?r.aliases:[])){ const s=strOf(a,40); if(s && s!==id && !aliases.includes(s)) aliases.push(s); }
+      const aliases=[]; for(const a of (Array.isArray(r.aliases)?r.aliases:[])){ const s=strOf(a,40).replace(/^[\s:：–—\-]+|[\s:：–—\-]+$/g,''); if(s && s!==id && !aliases.includes(s)) aliases.push(s); }      // 小模型常把「Madison –」連分隔符一起當別名
       roles.push({id, name:strOf(r.name,40)||id, aliases, gender:(r.gender==='m'||r.gender==='f')?r.gender:'n'});
     }
     if(!roles.length) throw new Error('沒有辨識到任何角色');
