@@ -1907,9 +1907,22 @@ const TSP=(function(){
   // ---------- 管線：第一段格式歸納 → 第二段分塊標記 → 組回 ----------
   // callApi(payload) → Promise<string>（Worker 回的 content）；錯誤若帶 fatal=true（429、503、被擋）則整個中止。
   async function runPipeline(o){
-    const lines=o.lines, callApi=o.callApi;
+    const lines=o.lines;
     let aborted=false;
     const prog=p=>{ if(aborted) return; try{ o.onProgress && o.onProgress(p); }catch(e){} };   // 中止後晚到的進度不再回報
+    // 上游暫時忙碌（429 限流、503）會回 retryable 的錯誤：退避重試幾次再放棄。慢的供應商一份劇本要跑十幾二十分鐘，
+    // 不該因為一次短暫限流就把前面已完成的塊全部作廢。其他 fatal（本站每日上限、被擋、取消）照舊立即中止。
+    const delays=o.retryDelays||[4000,12000,30000];
+    const callApi=async payload=>{
+      for(let a=0;;a++){
+        try{ return await o.callApi(payload); }
+        catch(e){
+          if(!(e && e.retryable) || a>=delays.length || aborted) throw e;
+          prog({stage:'retry', wait:delays[a], attempt:a+1, of:delays.length});
+          await new Promise(r=>setTimeout(r,delays[a]));
+        }
+      }
+    };
     prog({stage:'format',done:0,total:1});
     const sample=toWire(sampleForFormat(lines));
     let fmt=null, lastErr=null;
@@ -3719,11 +3732,16 @@ function workerUrl(){
   }catch(e){}
   return TSJ_CONFIG.WORKER_URL.replace(/\/+$/,'');
 }
+// 重試等待秒數（毫秒）；只有本機開發才允許用 ?retry=0 關掉等待（端到端測試用）
+function retryDelays(){
+  try{ if(/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && new URLSearchParams(location.search).get('retry')==='0') return [0,0,0]; }catch(e){}
+  return undefined;
+}
 const CONSENT_KEY='tsj_consent_v1';
 const hasConsent=()=>{ try{ return localStorage.getItem(CONSENT_KEY)==='1'; }catch(e){ return false; } };
 const setConsent=()=>{ try{ localStorage.setItem(CONSENT_KEY,'1'); }catch(e){} };
 
-const fatalErr=(msg,status)=>Object.assign(new Error(msg),{fatal:true,status});
+const fatalErr=(msg,status,extra)=>Object.assign(new Error(msg),{fatal:true,status},extra);
 const PARSE={cancelled:false, running:false};
 
 // 對 Worker 發一次請求，回傳模型內容字串。429／503／被擋 → fatal（整個解析中止）；502（模型輸出壞掉）→ 非 fatal（該塊重試）。
@@ -3743,7 +3761,11 @@ async function workerCall(payload){
   if(PARSE.cancelled) throw fatalErr('已取消');
   let body=null; try{ body=await res.json(); }catch(e){}
   if(res.status===429) throw fatalErr(body&&body.reason==='global'?'今天全站的解析次數已用完，請明天再試':'你今天的解析次數已用完（每人每日有上限），請明天再試',429);
-  if(res.status===503) throw fatalErr(body&&body.error==='upstream_rate_limited'?'AI 模型服務目前被限流（免費額度用完或供應商忙碌），請稍後再試':'服務暫時無法使用，請稍後再試',503);
+  if(res.status===503){
+    const limited=body&&body.error==='upstream_rate_limited';
+    // 上游限流或暫時失敗：交給管線退避重試（重試用完才會中止）；尚未設定（not_configured）重試也沒用
+    throw fatalErr(limited?'AI 模型服務目前被限流（免費額度用完或供應商忙碌），請稍後再試':'服務暫時無法使用，請稍後再試',503,{retryable:!(body&&body.error==='not_configured')});
+  }
   if(res.status===502) throw new Error('模型回應格式不正確');
   if(res.status===413) throw fatalErr('劇本片段過大，無法解析',413);
   if(res.status===403) throw fatalErr('解析服務拒絕了這個來源（網站網址與 Worker 的 ALLOWED_ORIGIN 不符）',403);
@@ -3783,9 +3805,10 @@ async function runParse(){
     try{ const c=await Store.get('parseCache',src.hash); if(c && c.result){ result=c.result; cached=true; } }catch(e){}
     if(!result){
       result=await TSP.runPipeline({
-        lines:src.lines, callApi:workerCall, concurrency:3,
+        lines:src.lines, callApi:workerCall, concurrency:3, retryDelays:retryDelays(),
         onProgress:p=>{
           if(!live()) return;
+          if(p.stage==='retry'){ document.getElementById('parseDetail').textContent='AI 服務暫時忙碌，'+Math.round(p.wait/1000)+' 秒後自動重試（第 '+p.attempt+'／'+p.of+' 次）…'; return; }
           if(p.stage==='format') setParseUI({stage:'分析劇本格式…',pct:p.done?8:3,cancel:true,detail:p.roles?'找到 '+p.roles+' 個角色':''});
           else setParseUI({stage:'逐行標記台詞（第 '+Math.min(p.done+1,p.total)+'／'+p.total+' 段）',pct:8+Math.round(90*p.done/p.total),cancel:true,
             detail:p.failed?p.failed+' 段自動標記失敗，會改用規則先標並請你檢查':''});

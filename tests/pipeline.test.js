@@ -429,6 +429,21 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(r.stats.prefix && r.stats.prefix.forced === 0 && r.stats.prefix.demoted === 0 && r.stats.prefix.flagged === 0, '完美模型：前綴覆寫一行都不動：' + JSON.stringify(r.stats.prefix));
     eq((await run('centered', {})).r.stats.prefix, null, '角色名獨立成行的劇本不啟用前綴模式');
   }
+  // 上游暫時忙碌（retryable）：退避重試，不把前面已完成的塊作廢；重試用完才中止；非 retryable 的 fatal 仍立即中止
+  {
+    const v = vs['colon-fw'], lines = T.buildLines({ text: v.text }).lines, mock = makeMock(lines, v.gold, {});
+    const busy = () => Object.assign(new Error('busy'), { fatal: true, retryable: true, status: 503 });
+    let n = 0; const waits = [];
+    const flaky = async p => { n++; if (n % 3 === 0 && n < 14) throw busy(); return mock.callApi(p); };       // 每第 3 次呼叫暫時失敗
+    const r = await T.runPipeline({ lines, callApi: flaky, concurrency: 1, retryDelays: [0, 0, 0], onProgress: p => { if (p.stage === 'retry') waits.push(p.attempt); } });
+    ok(r.stats.failedChunks === 0 && scoreLabels(lines, r.labels, v.gold).acc === 1 && waits.length >= 2, '暫時失敗後重試成功，結果與沒有失敗時完全一致（重試 ' + waits.length + ' 次）');
+    let calls = 0, threw = null;
+    try { await T.runPipeline({ lines, callApi: async () => { calls++; throw busy(); }, concurrency: 1, retryDelays: [0, 0, 0] }); } catch (e) { threw = e; }
+    ok(threw && threw.fatal && calls === 4, '一直失敗：試 1 次＋重試 3 次後中止（' + calls + ' 次呼叫）');
+    calls = 0; threw = null;
+    try { await T.runPipeline({ lines, callApi: async () => { calls++; throw Object.assign(new Error('quota'), { fatal: true, status: 429 }); }, concurrency: 1, retryDelays: [0, 0, 0] }); } catch (e) { threw = e; }
+    ok(threw && threw.status === 429 && calls === 1, '本站每日上限（非 retryable）：不重試，立即中止');
+  }
   // 進度回報
   {
     const seen = [];

@@ -65,7 +65,7 @@ const listen = (srv, port) => new Promise(r => srv.listen(port || 0, '127.0.0.1'
   const wr = spawn(wranglerBin, ['dev', '--local', '--port', String(WPORT), '--persist-to', persist,
     '--var', 'OPENROUTER_API_KEY:sk-e2e', '--var', 'MODEL:vendor/e2e', '--var', 'ALLOW_LOCALHOST:true',
     '--var', 'UPSTREAM_URL:http://127.0.0.1:' + mockPort + '/api/v1/chat/completions',
-    '--var', 'DAILY_PER_IP:12', '--var', 'DAILY_TOTAL:1000'], { cwd: path.join(ROOT, 'worker'), detached: true, env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' } });
+    '--var', 'DAILY_PER_IP:20', '--var', 'DAILY_TOTAL:1000'], { cwd: path.join(ROOT, 'worker'), detached: true, env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' } });
   let wlog = '';
   wr.stdout.on('data', d => wlog += d); wr.stderr.on('data', d => wlog += d);
   const kill = () => { try { process.kill(-wr.pid, 'SIGKILL'); } catch (e) {} };
@@ -80,7 +80,7 @@ const listen = (srv, port) => new Promise(r => srv.listen(port || 0, '127.0.0.1'
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push('console: ' + m.text()); });
-  const URL_ = `http://127.0.0.1:${sitePort}/index.html?worker=http://127.0.0.1:${WPORT}`;
+  const URL_ = `http://127.0.0.1:${sitePort}/index.html?worker=http://127.0.0.1:${WPORT}&retry=0`;
   await page.goto(URL_);
   await page.waitForFunction(() => document.body.classList.contains('home-mode'));
 
@@ -157,7 +157,7 @@ const listen = (srv, port) => new Promise(r => srv.listen(port || 0, '127.0.0.1'
   ok(upstream.calls.length === calls1, '相同內容不重複呼叫（仍是 ' + upstream.calls.length + ' 次）');
   ok((await page.evaluate(() => Store.all('scripts'))).length === 2, '快取命中仍建立新劇本');
 
-  // ---- 4. 超過每日上限 → 429 提示（DAILY_PER_IP=12，已用 1(失敗)+6=7；不同內容需 1+7 次，第 13 次起 429）----
+  // ---- 4. 超過每日上限 → 429 提示（DAILY_PER_IP=20；失敗的呼叫會重試 3 次，前面兩次失敗各用 4，再加完整流程 6 = 14；不同內容需 1+7 次，第 21 次起 429）----
   await page.click('#rvBack');   // 此時停在校正頁，用「‹ 我的劇本」回首頁
   await page.waitForFunction(() => document.body.classList.contains('home-mode'));
   await paste(V['wrapped'].text, '會超額');
