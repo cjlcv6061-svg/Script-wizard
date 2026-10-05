@@ -3526,7 +3526,7 @@ document.getElementById('addPaste').addEventListener('input',()=>{ clearTimeout(
    解析流程：同意 → 呼叫 Worker 兩段式標記 → 組回 → 存檔
    ============================================================ */
 // ★ 站長設定：解析服務（Cloudflare Worker）網址。換自訂網域時只改這一處（Worker 的 ALLOWED_ORIGIN 也要同步）。
-const TSJ_CONFIG={ WORKER_URL:'https://tsj-parse.CHANGE_ME.workers.dev' };
+const TSJ_CONFIG={ WORKER_URL:'https://tsj-parse.scriptwizard.workers.dev' };
 function workerUrl(){
   // 本機開發才允許用 ?worker=http://localhost:8787 覆寫
   try{

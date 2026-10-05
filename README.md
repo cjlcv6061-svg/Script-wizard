@@ -43,7 +43,7 @@ python3 -m http.server 8000   # 本機預覽 http://localhost:8000/
 
 1. **GitHub Pages**：Settings → Pages → Deploy from a branch，選要發布的分支與 `/ (root)`。（目前 repo 只有 `claude/new-session-woeij2` 一個分支，也是預設分支。）
 2. **Cloudflare / OpenRouter / 部署 Worker**：照 [worker/README.md](worker/README.md)；`OPENROUTER_API_KEY` 只用 `wrangler secret put` 在終端機貼上。
-3. **填 Worker 網址**：部署後把 `https://tsj-parse.<你的子網域>.workers.dev` 填進 `index.html` 的 `TSJ_CONFIG.WORKER_URL`（沒填時解析會提示尚未設定）。
+3. **填 Worker 網址**：部署後把 `https://tsj-parse.<你的子網域>.workers.dev` 填進 `index.html` 的 `TSJ_CONFIG.WORKER_URL`（目前已填 `https://tsj-parse.scriptwizard.workers.dev`）。
 4. **確認模型與供應商**：到 OpenRouter 模型頁確認 DeepSeek V4.1 Flash 的現行模型 ID 填進 `MODEL`（沒改時 Worker 回 503 `not_configured`）；確認 `PROVIDERS` 內供應商標示為不訓練、不保留提示詞；依官方條款修訂同意畫面的隱私聲明。
 5. **用真實劇本評測**：把 ≥10 份真實劇本與人工標準答案放進 `eval/real/`，用 `MODEL`、`PROVIDERS` 與上線相同的設定跑 `node eval/run.mjs --mode live --real eval/real --docs`。**目前沒有任何真實模型的準確率數字**（開發環境連不到 OpenRouter）。
 6. 待你決定：每 IP／全站每日上限初值（現為 60／600）、角色顏色調色盤（現沿用原暖色系，`ROLE_PALETTE`）、深色模式（現沿用原 app：只有深色）。
