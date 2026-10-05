@@ -114,7 +114,13 @@ export function buildMessages(payload) {
   throw new Error('unknown mode');
 }
 
-// OpenRouter 請求本體。env: { MODEL, PROVIDERS }
+// 資料政策：預設 deny＝OpenRouter 只用「不儲存、不拿來訓練」的端點。只有環境變數 DATA_COLLECTION 明確設成 allow 才放行
+// （例如要測試便宜但會拿資料改進產品的 contributor 版模型）。其他任何值（含空白、true、1）都視為 deny。僅供測試，正式服務請保持 deny。
+export function dataCollection(env) {
+  return String((env && env.DATA_COLLECTION) || '').trim().toLowerCase() === 'allow' ? 'allow' : 'deny';
+}
+
+// OpenRouter 請求本體。env: { MODEL, PROVIDERS, DATA_COLLECTION? }
 export function buildRequest(env, payload) {
   const providers = String(env.PROVIDERS || 'together,fireworks').split(',').map(s => s.trim()).filter(Boolean);
   const body = {
@@ -123,7 +129,7 @@ export function buildRequest(env, payload) {
     temperature: 0,
     max_tokens: payload.mode === 'format' ? 3000 : 8000,
     // 只允許清單內供應商，且要求不保留／不訓練
-    provider: { order: providers, only: providers, allow_fallbacks: true, data_collection: 'deny' }
+    provider: { order: providers, only: providers, allow_fallbacks: true, data_collection: dataCollection(env) }
   };
   if (payload.mode === 'format') body.response_format = { type: 'json_object' };
   return body;

@@ -1,7 +1,7 @@
 // 台詞小精靈 解析 Worker：持有 API key、限流、轉發到 OpenRouter、只回標籤。
 // 端點：POST /parse   body：{ mode:'format'|'label', lines:[[n,"text"],…], roles?:[…], rules?:{…} }
 //       GET  /health
-import { buildRequest, filterOutput } from '../prompts.mjs';
+import { buildRequest, filterOutput, dataCollection } from '../prompts.mjs';
 
 const MAX_BODY = 100 * 1024;      // 單次請求 body ≤ 100KB
 const MAX_LINES = 400;            // 單次請求行數 ≤ 400
@@ -65,7 +65,7 @@ export default {
     const H = cors || {};
 
     if (url.pathname === '/health') {
-      return json({ ok: true, configured: configured(env) }, 200, H);
+      return json({ ok: true, configured: configured(env), data_collection: dataCollection(env) }, 200, H);     // 讓站長確認目前的資料政策（deny＝不用會拿資料的端點）
     }
     if (url.pathname !== '/parse') return json({ error: 'not_found' }, 404, H);
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { ...H, allow: 'POST, OPTIONS' });

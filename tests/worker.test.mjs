@@ -108,6 +108,18 @@ const post = (env, body, headers = {}, raw) => worker.fetch(new Request('https:/
     ok(JSON.parse(upstreamCalls[1].init.body).response_format.type === 'json_object', 'format 模式要求 JSON 輸出');
   }
 
+  // ---- 資料政策：預設 deny，只有明確設成 allow 才放行 ----
+  {
+    const sent = async over => { upstreamCalls.length = 0; upstreamImpl = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '1|S|偉' } }] }) }); await post(makeEnv({ DAILY_PER_IP: '100', DAILY_TOTAL: '100', ...over }), labelBody()); return JSON.parse(upstreamCalls[0].init.body).provider.data_collection; };
+    eq(await sent({}), 'deny', '沒設 DATA_COLLECTION：deny');
+    for (const v of ['', 'true', '1', 'yes', 'deny', 'allowed', 'allow all', null]) eq(await sent({ DATA_COLLECTION: v }), 'deny', 'DATA_COLLECTION=' + JSON.stringify(v) + '：仍是 deny');
+    for (const v of ['allow', 'ALLOW', ' Allow ']) eq(await sent({ DATA_COLLECTION: v }), 'allow', 'DATA_COLLECTION=' + JSON.stringify(v) + '：明確放行');
+    for (const [over, want] of [[{}, 'deny'], [{ DATA_COLLECTION: 'allow' }, 'allow']]) {
+      const h = await worker.fetch(new Request('https://w.test/health', { headers: { origin: ORIGIN } }), makeEnv(over), {});
+      eq((await h.json()).data_collection, want, '/health 回報目前的資料政策：' + want);
+    }
+  }
+
   // ---- 輸出過濾：只回標籤／白名單欄位 ----
   {
     const env = makeEnv({ DAILY_PER_IP: '100', DAILY_TOTAL: '100' });
