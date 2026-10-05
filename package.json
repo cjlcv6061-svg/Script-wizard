@@ -1,0 +1,13 @@
+{
+  "name": "script-wizard",
+  "private": true,
+  "description": "台詞小精靈（通用版）— 單檔前端、Worker、評測腳本",
+  "scripts": {
+    "check": "node tests/check-syntax.js",
+    "test": "node tests/check-syntax.js && node tests/storage.test.js && node tests/legacy-compare.test.js"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.0.0",
+    "jsdom": "^26.0.0"
+  }
+}
