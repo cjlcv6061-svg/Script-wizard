@@ -101,6 +101,17 @@ const SCRIPT = {
   const nums = await page.evaluate(() => [...document.querySelectorAll('#lines .line .line-no')].map(e => e.textContent));
   ok(nums.join() === '1,2', '句號只編台詞行（歌曲與指示不編）：' + nums.join());
   await shot('s3_recite_song.png');
+
+  // ---- 歌曲頁：全劇歌曲集中列出 ----
+  ok(await page.isVisible('#songsBtn'), '有歌曲的劇本才顯示「歌曲」按鈕');
+  await page.click('#songsBtn');
+  await page.waitForSelector('#songsModal', { state: 'visible' });
+  const sl = await page.evaluate(() => ({ n: document.querySelectorAll('#songsList .song-block').length, head: document.querySelector('#songsList .song-head').textContent, rows: document.querySelectorAll('#songsList .song-lyrics div').length, scene: document.querySelector('#songsList .song-scene').textContent }));
+  ok(sl.n === 1 && /新歌名/.test(sl.head) && sl.rows === 4 && /第一場/.test(sl.scene), '歌曲頁列出歌名、歌詞與所在場次：' + JSON.stringify(sl));
+  await shot('s4_songs_page.png');
+  await page.click('#songsList .song-go');
+  await page.waitForFunction(() => document.getElementById('songsModal').style.display === 'none');
+  ok(await page.isVisible('#lines .line.song'), '按「到這一場」關閉歌曲頁並顯示該首歌');
   await browser.close(); site.close();
   assert.strictEqual(errors.length, 0, '頁面不得有未處理錯誤：\n' + errors.join('\n'));
   console.log(`✓ songs.browser.test.js：${n} 項通過`);

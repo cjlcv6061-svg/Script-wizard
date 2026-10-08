@@ -118,8 +118,43 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   // 中英混合的稱呼（亞Toy、呂VO、魔老VO）也認得
   const mixed = []; for (let i = 0; i < 14; i++) mixed.push('呂同學：句' + i, '魔老：回' + i);
   mixed.push('亞Toy  ：呀妳要玩具', '亞Toy  ：笑妹妹', '呂VO    ：係呢頭先', '魔老VO：係傳說嚟架', 'VO\t：特別新聞');
-  eq(T.detectPrefix(mk(mixed), rl('呂同學', '魔老')).candidates.map(c => [c[0], c[1]]), [['亞Toy', 2], ['呂VO', 1], ['魔老VO', 1], ['VO', 1]], '中英混合的稱呼：亞Toy、呂VO、魔老VO 都進候選');
+  eq(T.detectPrefix(mk(mixed), rl('呂同學', '魔老')).candidates.map(c => [c[0], c[1]]), [['亞Toy', 2], ['呂VO', 1]], '中英混合的稱呼：亞Toy、呂VO 進候選；「魔老VO」去掉畫外音標記就是已知角色魔老，不用問；單獨的「VO」是旁白，由規則決定、也不問模型');
   eq(T.splitSpeakerPrefix('呂VO    ：係呢', T.buildSurfaceMap([{ id: '呂VO', name: '呂VO', aliases: [] }])).ids, ['呂VO'], '中英混合的稱呼也能剝前綴');
+  // 畫外音（琳V.O.）、旁白／VO 本身、逗號合說（輝，華：）：行首有就是台詞，不問模型、不標待校正
+  {
+    const rl3 = [{ id: '輝', name: '王家輝', aliases: [] }, { id: '華', name: '張美華', aliases: [] }, { id: '琳', name: '王家琳', aliases: [] }];
+    const body = []; for (let i = 0; i < 14; i++) body.push('輝：句' + i, '華：回' + i);
+    body.push('輝，華：阿嫲！', '琳V.O.\t：喂亞哥，亞伯走咗！', '琳 O.S.：外面有人', 'VO\t：特別新聞報告：「今日下午發生火警」', '旁白：夜晚，下著雨。', '無人需要我留低，好自由，跟住我同自己講：「實仲有」');
+    const ls = mk(body), pf = T.detectPrefix(ls, rl3);
+    ok(pf.on, '前綴格式');
+    ok(pf.roles.some(r => r.id === 'VO') && pf.roles.some(r => r.id === '旁白'), '旁白、VO 單獨出現一次也成為角色（不靠出現次數）：' + pf.roles.map(r => r.id));
+    ok(!pf.candidates.some(c => c[0] === 'VO' || c[0] === '旁白'), '旁白、VO 不問模型');
+    const lab = new Map(ls.map(l => [l.n, { label: 'N', role: '' }]));
+    T.applyPrefix(ls, lab, pf.roles, pf.sep);
+    const got = n => lab.get(ls[n].n);
+    eq([got(28).label, got(28).role], ['S', '輝/華'], '「輝，華：」逗號合說（兩個都是已知角色）');
+    eq([got(29).label, got(29).role], ['S', '琳'], '「琳V.O.」是琳在畫外說話');
+    eq([got(30).label, got(30).role], ['S', '琳'], '「琳 O.S.」也是');
+    eq([got(31).label, got(31).role], ['S', 'VO'], '單獨的「VO：」');
+    eq([got(32).label, got(32).role], ['S', '旁白'], '「旁白：」');
+    ok(got(33).label === 'N', '句子裡的逗號不是合說：「無人需要我留低，好自由，…：」不被當前綴');
+    ok([28, 29, 30, 31, 32].every(n => !got(n).rv), '這幾行是確定的，不標待校正');
+  }
+  // 破折號貼著字的寫法（「Madison- So?」「Alexandre –I don't」）：稱呼是已知角色、破折號至少一邊有空白
+  {
+    const rl4 = [{ id: 'Madison', name: 'Madison', aliases: [] }, { id: 'Alexandre', name: 'Alexandre', aliases: [] }];
+    const body = []; for (let i = 0; i < 14; i++) body.push('Madison – Line ' + i, 'Alexandre – Reply ' + i);
+    body.push('Madison- So? Would you consider it?', "Alexandre –I don't know about that", 'Madison-based companies are rich', 'Well- that is a thought');
+    const ls = mk(body), pf = T.detectPrefix(ls, rl4);
+    eq(pf.sep, 'dash', '破折號風格');
+    const lab = new Map(ls.map(l => [l.n, { label: 'N', role: '' }]));
+    T.applyPrefix(ls, lab, pf.roles, pf.sep);
+    const got = n => lab.get(ls[n].n);
+    eq([got(28).label, got(28).role], ['S', 'Madison'], '「Madison- So?」（破折號前沒空白、後面有）');
+    eq([got(29).label, got(29).role], ['S', 'Alexandre'], '「Alexandre –I…」（破折號前有空白、後面沒有）');
+    ok(got(30).label === 'N', '「Madison-based …」（沒有空白）不是前綴');
+    ok(got(31).label === 'N', '「Well- that」不是已知角色');
+  }
   eq(T.detectPrefix(mk(src), rl('兄', '妹', '護士')).candidates.map(c => c[0]), ['SD Cue', '楊', '路人'], '已知角色不再是候選');
 
   // parseRoleVerdicts
