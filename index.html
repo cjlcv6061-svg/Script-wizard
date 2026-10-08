@@ -249,6 +249,13 @@
     .dir-text{padding-left:0;font-size:.86rem;}
     .dir-text::before{position:static;margin-right:5px;}
   }
+  /* 歌曲區塊：整段歌詞當參考顯示，不編號、不朗讀、不隱藏、不出題 */
+  .line.song{display:block;border-bottom:none;padding:8px 0;}
+  .song-block{margin-left:72px;border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:10px;padding:10px 14px;background:rgba(127,127,127,.06);}
+  .song-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:700;font-size:.9rem;color:var(--gold);}
+  .song-lyrics{font-size:.96rem;line-height:1.9;color:var(--ink);opacity:.92;}
+  .song-lyrics div{padding:1px 0;}
+  @media(max-width:560px){ .song-block{margin-left:0;} }
   .spk{
     flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:3px;
     user-select:none;padding-top:1px;
@@ -787,6 +794,8 @@
   .rv-seal{font-size:.72rem;font-weight:700;min-width:1.7em;height:1.7em;line-height:1.7em;text-align:center;border-radius:4px;color:#1c150f;padding:0 3px;}
   .rv-text{flex:1;min-width:0;line-height:1.6;word-break:break-word;font-size:.94rem;}
   .k-D .rv-text{color:var(--gold);font-style:italic;} .k-X .rv-text{color:var(--muted);text-decoration:line-through;}
+  .k-Y .rv-chip{background:var(--gold);color:#1c150f;} .k-Y .rv-text{white-space:pre-wrap;color:var(--ink);opacity:.9;} .k-Y .rv-text b{display:block;color:var(--gold);}
+  .rv-songtitle{width:100%;box-sizing:border-box;margin-bottom:8px;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;padding:6px 8px;}
   .rv-edit{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);}
   .rv-seg{display:flex;gap:6px;margin-bottom:8px;}
   .rv-seg button, .rv-rolechip{font:inherit;font-size:.78rem;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:14px;padding:3px 11px;cursor:pointer;}
@@ -1084,7 +1093,7 @@
 /* ============================================================
    劇本資料（v2 schema，見 SPEC.md 第 4 節）
    scenes[].lines 每行為 {s:說話者, t:台詞(去指示), r?:含內嵌指示原文, seg?:分節}
-   或 {d:獨立舞台指示}。被選角色的台詞需背誦並隱藏。
+   或 {d:獨立舞台指示}、或 {song:標題, lyrics:[歌詞…]}（歌曲區塊：整段顯示，不編號、不朗讀、不隱藏）。被選角色的台詞需背誦並隱藏。
    劇本存在 IndexedDB（見下方 Store），啟動後由首頁選取載入。
    ============================================================ */
 let SCENES = [];
@@ -1187,6 +1196,11 @@ function normalizeScript(raw, fallbackTitle, opts){
       if(!ln || typeof ln!=='object') continue;
       if(typeof ln.d==='string'){ const o={d:ln.d}; if(ln.rv) o.rv=true; lines.push(o); continue; }
       if(typeof ln.x==='string'){ if(keepNoise) lines.push({x:ln.x}); continue; }
+      if(Array.isArray(ln.lyrics)){                              // 歌曲區塊：{song:標題, lyrics:[歌詞…]}，不是要背的台詞
+        const ly=ln.lyrics.filter(x=>typeof x==='string' && x.trim());
+        if(ly.length){ const o={song:typeof ln.song==='string'?ln.song.trim():'', lyrics:ly}; if(ln.rv) o.rv=true; lines.push(o); }
+        continue;
+      }
       if(typeof ln.s==='string' && typeof ln.t==='string'){
         const s=cleanSpk(ln.s);
         if(!s) continue;
@@ -1232,7 +1246,7 @@ function normalizeScript(raw, fallbackTitle, opts){
     scenes:out
   };
 }
-function countScriptLines(data){ let n=0; for(const sc of data.scenes) for(const ln of sc.lines) if(ln.d===undefined && ln.x===undefined) n++; return n; }
+function countScriptLines(data){ let n=0; for(const sc of data.scenes) for(const ln of sc.lines) if(ln.d===undefined && ln.x===undefined && ln.song===undefined) n++; return n; }
 
 async function sha256Hex(text){
   try{
@@ -1884,10 +1898,69 @@ const TSP=(function(){
   // ---------- 組回（規格 5.3）：依行號，C 併入前一個 S，H 開新場景，N 丟棄（保留為 {x}）----------
   // 折行接回：兩邊都是半形字元（英文等）時補一個空白；中文不補
   const joinParts=(a,b)=>!a?b:(/[!-~]$/.test(a)&&/^[!-~]/.test(b))?a+' '+b:a+b;
+  // ---------- 歌曲區塊：歌詞不是要背的台詞，整段收成一個 {song, lyrics} ----------
+  // 音樂劇的歌詞沒有「角色名：」前綴，模型常把它們標成續行、指示或雜訊，或有些行被當台詞。
+  // 規則（標記完成後才跑，只動標成 C／D／N 的行，不動台詞與標題）：
+  //  ‧種子＝歌手標記行「(合)　…」「合)　…」（標記後面接 Tab 或兩個以上空白），或歌曲標題行「歌曲三：…」「間場歌曲：…」「♪ …」
+  //  ‧從種子往前後延伸：連續的短行（≤40 字）、不是台詞前綴行、不是整行括號的舞台指示、不是音效提示（SD／SL／VO…）、
+  //    前一行是台詞時不吞它的續行；碰到台詞、標題、整行指示就停。
+  //  ‧標題＝標題行冒號後的字；緊接標題的作曲／版權行不放進歌詞。
+  const SONG_TAG_RE=/^\s*(?:[0-9０-９一二三四五六七八九十]{1,3}[\t　 ]+)?(?:[（(][^()（）]{1,14}[)）]|[^()（）\s]{1,6}[)）])(?:[\t　]+| {2,})/;       // 前面可以帶段落編號：「二　楊)　感激主」
+  const SONG_TITLE_HEAD='[（(【\\[]?\\s*(?:間場|開場|終場|序|主題|插曲|片頭|片尾|謝幕)?(?:歌曲|Song|Musical Number)\\s*[0-9０-９一二三四五六七八九十]*\\s*[：:﹕]\\s*';
+  const SONG_TITLE_RE=new RegExp('^\\s*(?:'+SONG_TITLE_HEAD+'\\S|[♪♫🎵])','i');
+  const SONG_TITLE_STRIP=new RegExp('^\\s*(?:'+SONG_TITLE_HEAD+'|[♪♫🎵]+\\s*)','i');
+  const SONG_CUE_RE=/^\s*(?:SD|SL|SR|LX|FX|VO|Cue)\b/i;
+  const SONG_CREDIT_RE=/^\s*(?:曲|詞|作曲|作詞|編曲|粵語新詞|英語詞|原曲|Music|Lyrics|©)\s*[﹕:：]?/i;
+  const SONG_MAX_LINE=40;
+  function detectSongs(lines, labels, roles, sep){
+    const surf=buildSurfaceMap(roles||[]), out=[];
+    const lab=i=>(labels.get(lines[i].n)||{}).label;
+    const isDialogue=i=>{ const m=pfxMatch(lines[i].text, sep||null); return !!(m && m.toks.every(t=>surfGet(surf,t))); };
+    const squash=t=>t.replace(/[\t　]+/g,'　').trim();
+    const absorbable=(i,dir)=>{
+      const L=lab(i); if(L!=='C' && L!=='D' && L!=='N') return false;
+      const t=lines[i].text;
+      if(SONG_CUE_RE.test(t) || isDialogue(i)) return false;
+      if(/^\s*[（(][^\t]*[)）]\s*$/.test(t) && !SONG_TAG_RE.test(t)) return false;       // 整行括號＝舞台指示
+      if(SONG_CREDIT_RE.test(t)) return true;                                            // 作曲／版權行可以很長
+      if(t.replace(/\s+/g,'').length>SONG_MAX_LINE) return false;
+      if(L==='C' && dir<0 && i>0 && lab(i-1)==='S') return false;                        // 這行是前一句台詞的續行
+      return t.replace(/\s+/g,'').length>=2 || SONG_TAG_RE.test(t);
+    };
+    const taken=new Uint8Array(lines.length), blocks=[];
+    for(let i=0;i<lines.length;i++){
+      if(taken[i]) continue;
+      const t=lines[i].text, L=lab(i);
+      if(L==='S' || L==='H') continue;
+      const seedTag=SONG_TAG_RE.test(t) && !/^\s*\d+\)/.test(t), seedTitle=SONG_TITLE_RE.test(t) && !SONG_CUE_RE.test(t);
+      if(!seedTag && !seedTitle) continue;
+      let a=i, b=i;
+      while(a>0 && !taken[a-1] && i-a<60 && absorbable(a-1,-1)) a--;
+      while(b+1<lines.length && !taken[b+1] && b-i<80 && absorbable(b+1,+1)) b++;
+      if(!seedTag && b===i) continue;                       // 只有標題、後面沒有歌詞
+      for(let k=a;k<=b;k++) taken[k]=1;
+      blocks.push({a,b});
+    }
+    let covered=0; for(const bk of blocks) covered+=bk.b-bk.a+1;
+    if(covered>lines.length*0.5) return {songs:[], covered:0};         // 一半以上都是歌？多半是誤判，整批放棄
+    blocks.forEach((bk,id)=>{
+      let title='', gotTitle=false; const nums=[];
+      for(let k=bk.a;k<=bk.b;k++){
+        const t=lines[k].text, n=lines[k].n;
+        if(!gotTitle && SONG_TITLE_RE.test(t)){ gotTitle=true; title=squash(t.replace(SONG_TITLE_STRIP,'')); labels.set(n,{label:'Y',role:'',song:id,part:'title',title}); continue; }
+        if(SONG_CREDIT_RE.test(t) && !nums.length){ labels.set(n,{label:'N',role:'',rv:false}); continue; }       // 緊接標題的作曲／版權行：當雜訊保留
+        labels.set(n,{label:'Y',role:'',song:id,part:'lyric',text:squash(t)}); nums.push(n);
+      }
+      out.push({id,title,lines:nums.length,from:lines[bk.a].n,to:lines[bk.b].n});
+    });
+    return {songs:out, covered};
+  }
+
   function assemble(lines, labels, roles){
     const surf=buildSurfaceMap(roles), roleIds=roles.map(r=>r.id);
-    const scenes=[], stats={S:0,C:0,D:0,H:0,N:0,orphanC:0,review:0};
+    const scenes=[], stats={S:0,C:0,D:0,H:0,N:0,Y:0,orphanC:0,review:0};
     let cur=null, lastS=null;
+    const songItems=new Map();
     const newScene=h=>{ cur={meta:h?parseHeading(h):{no:'',name:'',season:'',place:''}, heads:h?[h]:[], items:[]}; scenes.push(cur); lastS=null; };
     for(const L of lines){
       let lab=labels.get(L.n)||{label:'N',role:'',rv:true};
@@ -1900,6 +1973,13 @@ const TSP=(function(){
         continue;
       }
       if(!cur) newScene('');
+      if(lab.label==='Y'){                                      // 歌曲：同一首的歌詞行併成一個區塊
+        let it=songItems.get(lab.song);
+        if(!it || it.scene!==cur){ it={k:'Y', scene:cur, title:'', lyrics:[]}; songItems.set(lab.song,it); cur.items.push(it); }
+        if(lab.part==='title') it.title=lab.title||''; else it.lyrics.push(lab.text!=null?lab.text:L.text);
+        lastS=null;
+        continue;
+      }
       if(lab.label==='S'){
         let rest=L.text, dir='', pre='';
         const sp=splitSpeakerPrefix(rest,surf);
@@ -1920,6 +2000,7 @@ const TSP=(function(){
       const ls=[];
       for(const it of sc.items){
         if(it.k==='X'){ ls.push({x:it.text}); continue; }
+        if(it.k==='Y'){ if(it.lyrics.length) ls.push({song:it.title, lyrics:it.lyrics}); continue; }
         if(it.k==='D'){ const o={d:it.text}; if(it.rv) o.rv=true; ls.push(o); continue; }
         const full=(it.dir?it.dir:'')+it.text;                 // 前綴上的指示放回最前面
         const sd=stripDirections(full);
@@ -2059,14 +2140,15 @@ const TSP=(function(){
       pfx=applyPrefix(lines, labels, fmt.roles, pm.sep);
       const t=tidyRoles(lines, labels, fmt.roles, pm.sep); finalRoles=t.roles; pfx.dropped=t.dropped; pfx.renamed=t.renamed;
     }
+    const sg=detectSongs(lines, labels, finalRoles, pm.on?pm.sep:null);
     const asm=assemble(lines, labels, finalRoles);
     const roles=finalRoles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
     return {roles, rules:fmt.rules, scenes:asm.scenes, labels,
       stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), partialChunkNos:partial.sort((a,b)=>a-b), partialLines, retried, lines:lines.length}, asm.stats,
-        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify}), errors};
+        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered}), errors};
   }
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 
@@ -2076,9 +2158,9 @@ const TSP=(function(){
    ============================================================ */
 const TSE=(function(){
   const stripMarks=s=>String(s==null?'':s).replace(/[⟦⟧]/g,'');
-  const kindOf=l=>l.d!==undefined?'D':l.x!==undefined?'X':'S';
-  // 編輯框顯示的完整文字：台詞用含指示的原文 r（沒有就用 t），指示／雜訊用原文
-  const fullText=l=>l.d!==undefined?l.d:l.x!==undefined?l.x:(l.r!==undefined?l.r:l.t);
+  const kindOf=l=>l.song!==undefined?'Y':l.d!==undefined?'D':l.x!==undefined?'X':'S';
+  // 編輯框顯示的完整文字：台詞用含指示的原文 r（沒有就用 t），指示／雜訊用原文；歌曲區塊＝每行一句歌詞
+  const fullText=l=>l.song!==undefined?l.lyrics.join('\n'):l.d!==undefined?l.d:l.x!==undefined?l.x:(l.r!==undefined?l.r:l.t);
   const joinText=(a,b)=>!a?b:(/[!-~]$/.test(a)&&/^[!-~]/.test(b))?a+' '+b:a+b;
   const cleanId=x=>String(x==null?'':x).trim().replace(/[<>&"'\/]/g,'');
 
@@ -2088,6 +2170,11 @@ const TSE=(function(){
     text=String(text==null?'':text);
     if(kind==='D') return {d:stripMarks(text)};
     if(kind==='X') return {x:stripMarks(text)};
+    if(kind==='Y'){
+      const ly=text.split('\n').map(x=>stripMarks(x).trim()).filter(Boolean);
+      if(!ly.length) throw new Error('歌詞不能空白');
+      return {song:'', lyrics:ly};
+    }
     if(!roles || !roles.length) throw new Error('台詞需要指定角色');
     const sd=TSP.stripDirections(text);
     if(!sd.t.trim()) return {d:stripMarks(text)};
@@ -2110,7 +2197,7 @@ const TSE=(function(){
     let j=li-1; while(j>=0 && ls[j].x!==undefined) j--;
     if(j<0) return -1;
     const a=ls[j], b=ls[li];
-    if(a.x!==undefined) return -1;
+    if(a.x!==undefined || a.song!==undefined || b.song!==undefined) return -1;          // 歌曲區塊不併入台詞
     const ta=fullText(a), tb=fullText(b);
     let merged;
     if(a.d!==undefined) merged={d:stripMarks(joinText(ta,tb))};
@@ -2130,7 +2217,32 @@ const TSE=(function(){
   }
   function splitLine(data,si,li,pos){
     const l=data.scenes[si].lines[li];
+    if(l.song!==undefined) throw new Error('歌曲區塊不能拆行，請先「拆成一般行」');
     return splitAt(data,si,li,kindOf(l),rolesOf(l),fullText(l),pos);
+  }
+  // ---------- 歌曲區塊 ----------
+  // 改歌曲的標題與歌詞（歌詞每行一句）
+  function setSong(data,si,li,title,text){
+    const l=data.scenes[si].lines[li];
+    if(!l || l.song===undefined) throw new Error('這不是歌曲區塊');
+    const nl=makeLine('Y',null,text); nl.song=stripMarks(title==null?'':title).trim();
+    data.scenes[si].lines[li]=nl; return nl;
+  }
+  // 把歌曲區塊拆成一般行：每句歌詞變成一行指示（不朗讀、不隱藏），再自行改成台詞
+  function songToLines(data,si,li){
+    const ls=data.scenes[si].lines, l=ls[li];
+    if(!l || l.song===undefined) throw new Error('這不是歌曲區塊');
+    const nl=l.lyrics.map(t=>({d:stripMarks(t)}));
+    ls.splice(li,1,...nl); return li;
+  }
+  // 把這一行改成歌詞：前面（或後面）緊接著歌曲區塊就併進去，否則自成一個新的歌曲區塊。回傳歌曲區塊的索引
+  function lineToSong(data,si,li,text){
+    const ls=data.scenes[si].lines, cur=ls[li];
+    const nl=makeLine('Y',null,text==null?fullText(cur):text);
+    const prev=li>0?ls[li-1]:null, next=li+1<ls.length?ls[li+1]:null;
+    if(prev && prev.song!==undefined){ prev.lyrics.push(...nl.lyrics); ls.splice(li,1); return li-1; }
+    if(next && next.song!==undefined){ next.lyrics.unshift(...nl.lyrics); ls.splice(li,1); return li; }
+    ls[li]=nl; return li;
   }
   function uniqueNo(data,want){
     const used=new Set(data.scenes.map(s=>s.no));
@@ -2215,7 +2327,7 @@ const TSE=(function(){
   }
   function clearRv(data,si,li){ const l=data.scenes[si].lines[li]; if(l) delete l.rv; }
 
-  return {stripMarks,kindOf,fullText,rolesOf,makeLine,setLine,mergePrev,splitAt,splitLine,uniqueNo,insertSceneBefore,removeSceneBreak,setSceneField,
+  return {stripMarks,kindOf,fullText,rolesOf,makeLine,setLine,mergePrev,splitAt,splitLine,setSong,songToLines,lineToSong,uniqueNo,insertSceneBefore,removeSceneBreak,setSceneField,
     roleUsage,addRole,renameRole,setGender,mergeRoles,deleteRole,pending,clearRv};
 })();
 /* EDITOR-CORE:END */
@@ -2473,8 +2585,23 @@ function renderLines(){
   // 句號：只計可朗讀的台詞行（跳過舞台指示），供循環範圍參照
   lineNoMap={};
   let no=0;
-  sc.lines.forEach((ln,idx)=>{ if(ln.d===undefined){ no++; lineNoMap[idx]=no; } });
+  sc.lines.forEach((ln,idx)=>{ if(ln.d===undefined && ln.song===undefined){ no++; lineNoMap[idx]=no; } });
   sc.lines.forEach((ln,idx)=>{
+    // 歌曲區塊：整段歌詞當參考顯示（只練未掌握時略過）
+    if(ln.song!==undefined){
+      if(onlyUnmastered) return;
+      const srow=document.createElement('div');
+      srow.className='line song';
+      srow.dataset.idx=idx;
+      const blk=document.createElement('div'); blk.className='song-block';
+      const head=document.createElement('div'); head.className='song-head';
+      head.textContent='♪ '+(ln.song||'歌曲');
+      const lyr=document.createElement('div'); lyr.className='song-lyrics';
+      ln.lyrics.forEach(t=>{ const d=document.createElement('div'); d.textContent=t; lyr.appendChild(d); });
+      blk.appendChild(head); blk.appendChild(lyr); srow.appendChild(blk);
+      linesEl.appendChild(srow);
+      return;
+    }
     // 獨立舞台指示
     if(ln.d!==undefined){
       if(!showDir || onlyUnmastered) return;   // 隱藏指示時、或只練未掌握時略過
@@ -2635,7 +2762,7 @@ function updateRecallProgress(){
   if(!sc||!fill||!txt) return;
   let mine=0, remembered=0;
   sc.lines.forEach((ln,idx)=>{
-    if(ln.d!==undefined) return;
+    if(ln.d!==undefined || ln.song!==undefined) return;
     if(!isHidden(ln.s)) return;
     mine++;
     if(getRecall(sc.no, idx)==='yes') remembered++;
@@ -3112,7 +3239,7 @@ function inLoopRange(no){
 function firstLoopIdx(){
   const lines=SCENES[current].lines;
   for(let i=0;i<lines.length;i++){
-    if(lines[i].d!==undefined) continue;
+    if(lines[i].d!==undefined || lines[i].song!==undefined) continue;
     const no=lineNoMap[i];
     if(no!==undefined && inLoopRange(no)) return i;
   }
@@ -3156,7 +3283,7 @@ async function play(startIdx){
   while(i<lines.length){
     if(!alive()) return;           // 被停止或換場 → 直接結束，不再往下
     const ln=lines[i];
-    if(ln.d!==undefined){ i++; continue; }   // 舞台指示不朗讀、不留白
+    if(ln.d!==undefined || ln.song!==undefined){ i++; continue; }   // 舞台指示與歌曲區塊不朗讀、不留白
     // 循環範圍：超出上限即視為本輪結束
     if(loopOn){
       const no=lineNoMap[i];
@@ -3224,7 +3351,7 @@ async function play(startIdx){
 // 朗讀中點選某行 → 跳到該行繼續
 function jumpToLine(idx){
   const ln=SCENES[current].lines[idx];
-  if(!ln || ln.d!==undefined) return;   // 指示行不跳
+  if(!ln || ln.d!==undefined || ln.song!==undefined) return;   // 指示行與歌曲區塊不跳
   jumpTo=idx;
   breakCurrent();
 }
@@ -4003,13 +4130,17 @@ function revRowEl(si,li){
   const row=el('div','rv-row k-'+k+(l.rv?' rv':'')+(isOpen?' open':''));
   row.dataset.si=si; row.dataset.li=li;
   const main=el('div','rv-main');
-  main.appendChild(el('span','rv-chip',k==='S'?'台詞':k==='D'?'指示':'雜訊'));
+  main.appendChild(el('span','rv-chip',k==='S'?'台詞':k==='D'?'指示':k==='Y'?'歌曲':'雜訊'));
   if(k==='S'){
     const seals=el('span','rv-seals');
     TSE.rolesOf(l).forEach(id=>{ const s=el('span','rv-seal',sealText(id)); s.style.background=revColor(id); s.title=revRoleName(id); seals.appendChild(s); });
     main.appendChild(seals);
   }
-  main.appendChild(el('span','rv-text',TSE.fullText(l)));
+  if(k==='Y'){
+    const tx=el('span','rv-text'); tx.appendChild(el('b',null,'♪ '+(l.song||'歌曲')+'（'+l.lyrics.length+' 行）'));
+    tx.appendChild(document.createTextNode(TSE.fullText(l)));
+    main.appendChild(tx);
+  }else main.appendChild(el('span','rv-text',TSE.fullText(l)));
   row.appendChild(main);
   if(isOpen) row.appendChild(revEditor(si,li));
   else row.onclick=()=>revOpen(si,li);
@@ -4024,8 +4155,31 @@ function revOpen(si,li){
 }
 function revClose(si){ REV.open=null; revRerenderScene(si); }
 
+function revSongEditor(si,li){
+  const sc=REV.data.scenes[si], l=sc.lines[li];
+  const ed=el('div','rv-edit');
+  ed.onclick=e=>e.stopPropagation();
+  const ti=el('input','rv-songtitle'); ti.value=l.song||''; ti.placeholder='歌名（可留空）'; ti.setAttribute('aria-label','歌名');
+  const ta=el('textarea'); ta.value=TSE.fullText(l); ta.setAttribute('aria-label','歌詞，每行一句');
+  ed.appendChild(ti); ed.appendChild(ta);
+  const done=fn=>{ try{ fn(); REV.open=null; revPersist(); revRerenderScene(si); }catch(e){ toast(e.message); } };
+  const btns=el('div','rv-btns');
+  const add=(label,fn,cls)=>{ const b=el('button','ghost-btn'+(cls?' '+cls:''),label); b.onclick=fn; btns.appendChild(b); return b; };
+  add('儲存',()=>done(()=>TSE.setSong(REV.data,si,li,ti.value,ta.value)),'primary-solid');
+  add('取消',()=>revClose(si));
+  if(l.rv) add('✓ 沒問題',()=>done(()=>TSE.clearRv(REV.data,si,li)));
+  add('拆成一般行',()=>{ if(!confirm('把這首歌拆成一般行（每句歌詞一行指示），再自行改成台詞？')) return; done(()=>TSE.songToLines(REV.data,si,li)); });
+  if(li>0) add('在此行前插入場次',()=>{
+    const h=prompt('新場次的標題（例：第三場　場名）','');
+    if(h===null) return;
+    try{ TSE.insertSceneBefore(REV.data,si,li,h); REV.open=null; revPersist(); revRender(); }catch(e){ toast(e.message); }
+  });
+  ed.appendChild(btns);
+  return ed;
+}
 function revEditor(si,li){
   const sc=REV.data.scenes[si], l=sc.lines[li];
+  if(l.song!==undefined) return revSongEditor(si,li);
   const st={kind:TSE.kindOf(l), roles:new Set(TSE.rolesOf(l))};
   if(st.kind==='S' && !st.roles.size) st.roles.add(REV.data.roles[0]&&REV.data.roles[0].id);
   const ed=el('div','rv-edit');
@@ -4036,7 +4190,7 @@ function revEditor(si,li){
     chips.style.display=st.kind==='S'?'flex':'none';
     [...chips.children].forEach(b=>b.setAttribute('aria-pressed',st.roles.has(b.dataset.id)?'true':'false'));
   };
-  [['S','台詞'],['D','指示'],['X','雜訊']].forEach(([k,t])=>{ const b=el('button',null,t); b.dataset.k=k; b.onclick=()=>{ st.kind=k; if(k==='S' && !st.roles.size && REV.data.roles[0]) st.roles.add(REV.data.roles[0].id); paint(); }; seg.appendChild(b); });
+  [['S','台詞'],['D','指示'],['Y','歌詞'],['X','雜訊']].forEach(([k,t])=>{ const b=el('button',null,t); b.dataset.k=k; b.onclick=()=>{ st.kind=k; if(k==='S' && !st.roles.size && REV.data.roles[0]) st.roles.add(REV.data.roles[0].id); paint(); }; seg.appendChild(b); });
   REV.data.roles.forEach(r=>{ const b=el('button','rv-rolechip',r.name||r.id); b.dataset.id=r.id; b.onclick=()=>{ if(st.roles.has(r.id)) st.roles.delete(r.id); else st.roles.add(r.id); paint(); }; chips.appendChild(b); });
   ed.appendChild(seg); ed.appendChild(chips);
   const ta=el('textarea'); ta.value=TSE.fullText(l);
@@ -4045,7 +4199,7 @@ function revEditor(si,li){
   const done=(fn)=>{ try{ fn(); REV.open=null; revPersist(); revRerenderScene(si); }catch(e){ toast(e.message); } };
   const btns=el('div','rv-btns');
   const add=(label,fn,cls)=>{ const b=el('button','ghost-btn'+(cls?' '+cls:''),label); b.onclick=fn; btns.appendChild(b); return b; };
-  add('儲存',()=>done(()=>TSE.setLine(REV.data,si,li,st.kind,rolesNow(),ta.value)),'primary-solid');
+  add('儲存',()=>done(()=>{ if(st.kind==='Y') TSE.lineToSong(REV.data,si,li,ta.value); else TSE.setLine(REV.data,si,li,st.kind,rolesNow(),ta.value); }),'primary-solid');
   add('取消',()=>revClose(si));
   if(l.rv) add('✓ 沒問題',()=>done(()=>TSE.clearRv(REV.data,si,li)));
   add('與上一行合併',()=>{ try{ const j=TSE.mergePrev(REV.data,si,li); if(j<0) return toast('前面沒有可以合併的行'); REV.open=null; revPersist(); revRerenderScene(si); }catch(e){ toast(e.message); } });

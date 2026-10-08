@@ -66,7 +66,7 @@ const listen = (srv, port) => new Promise(r => srv.listen(port || 0, '127.0.0.1'
   const WPORT = 8791;
   const persist = fs.mkdtempSync(path.join(os.tmpdir(), 'tsj-wr-'));
   const wr = spawn(wranglerBin, ['dev', '--local', '--port', String(WPORT), '--persist-to', persist,
-    '--var', 'OPENROUTER_API_KEY:sk-e2e', '--var', 'MODEL:vendor/e2e', '--var', 'ALLOW_LOCALHOST:true',
+    '--var', 'OPENROUTER_API_KEY:sk-e2e', '--var', 'MODEL:vendor/e2e', '--var', 'PROVIDERS:together,fireworks', '--var', 'ALLOW_LOCALHOST:true',
     '--var', 'UPSTREAM_URL:http://127.0.0.1:' + mockPort + '/api/v1/chat/completions',
     '--var', 'DAILY_PER_IP:30', '--var', 'DAILY_TOTAL:1000'], { cwd: path.join(ROOT, 'worker'), detached: true, env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' } });
   let wlog = '';

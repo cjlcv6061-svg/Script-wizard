@@ -576,6 +576,63 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(sentRoles.length > 1 && sentRoles.every(n => n <= 60), '每個標記請求的角色清單都 ≤60：' + sentRoles.join(','));
     ok(Math.max(...sentRoles) < 72, '大型群戲時每塊只送用得到的角色，不是整份清單');
   }
+  // 歌曲區塊：歌詞（歌手標記行、標題行、緊鄰的短行）整段收成 {song, lyrics}，不當台詞、不標待校正
+  {
+    const g = [];
+    for (let i = 0; i < 12; i++) { g.push('甲：第' + i + '句，你今日點呀？', '乙：我好好呀，多謝你關心。'); }
+    g.push('（音樂起。）', '歌曲一：出發之歌', '曲：王小明\t詞：李大文', '(合)\t出發吧出發吧，', '(甲)\t向前行向前行，', '不怕路途遠，', '齊齊向前進！', '（音樂完。）');
+    for (let i = 0; i < 6; i++) { g.push('甲：唱完好開心' + i + '。', '乙：我哋再嚟過。'); }
+    g.push('SD Cue：歌曲二音樂', '(乙)\t再唱一首歌，', '(甲)\t唱到天亮。', '二\t乙)\t第二節開始，', '直到永遠。');
+    g.push('甲：夠啦，收工。', '乙：好呀。', '這是一段很長的舞台敘述文字，不是歌詞，因為它超過了四十個字所以不會被當作歌詞吸進去，應該保持原來的標記。');
+    const lines = T.buildLines({ text: g.join('\n') }).lines;
+    const callApi = async p => {
+      if (p.mode === 'format') return JSON.stringify({ roles: [{ id: '甲', name: '甲' }, { id: '乙', name: '乙' }], rules: { speaker_pos: 'prefix' } });
+      if (p.mode === 'roles') return p.candidates.map(c => c[0] + '|N|').join('\n');
+      const ids = new Set(p.roles.map(r => r.id));
+      return p.lines.map(([n, text]) => {
+        const w = text.split('：')[0];
+        if (ids.has(w)) return n + '|S|' + w;
+        return n + (/^[（(].*[）)]$/.test(text) ? '|D|' : /[一-鿿]/.test(text) && text.length > 40 ? '|D|' : '|N|');
+      }).join('\n');
+    };
+    const r = await T.runPipeline({ lines, callApi, concurrency: 1, chunkSize: 150 });
+    const L = r.scenes.flatMap(s => s.lines), songs = L.filter(l => l.song !== undefined);
+    eq(songs.length, 2, '兩首歌（模型把歌詞全標成雜訊也一樣找得到）');
+    eq(songs[0], { song: '出發之歌', lyrics: ['(合)　出發吧出發吧，', '(甲)　向前行向前行，', '不怕路途遠，', '齊齊向前進！'] }, '第一首：標題取冒號後的字、歌詞保留歌手標記、作曲行不進歌詞');
+    eq(songs[1].lyrics, ['(乙)　再唱一首歌，', '(甲)　唱到天亮。', '二　乙)　第二節開始，', '直到永遠。'], '第二首：沒有標題；音效提示 SD Cue 不進歌詞；段落編號開頭的歌手標記也算');
+    eq(songs[1].song, '', '沒有標題就留空');
+    eq(L.filter(l => l.s !== undefined).length, 12 * 2 + 6 * 2 + 2, '所有台詞行（含歌曲前後）都保留');
+    ok(L.some(l => l.x === '曲：王小明\t詞：李大文'), '緊接標題的作曲行當雜訊保留，不吞掉');
+    ok(L.some(l => l.x !== undefined && /^SD Cue/.test(l.x)), '音效提示行當雜訊保留');
+    ok(L.some(l => l.d !== undefined && /舞台敘述/.test(l.d)), '超過 40 字的長敘述不被吸進歌詞');
+    eq(r.stats.songs, 2, 'stats.songs');
+    eq(r.stats.review, 0, '歌曲區塊不產生待校正行');
+    ok(L.some(l => l.d === '（音樂起。）') && L.some(l => l.d === '（音樂完。）'), '整行括號的舞台指示留在原處，不被吸進歌詞');
+  }
+  // 不是音樂劇的劇本：不誤判成歌曲（離地範例劇本各版面、模型完美）
+  {
+    for (const id of ['colon-fw', 'wrapped', 'centered']) {
+      const { r } = await run(id, {});
+      eq(r.stats.songs, 0, id + '：沒有歌曲區塊');
+    }
+  }
+  // 台詞（模型標 S）與前一句台詞的續行（C）不被吸進歌曲
+  {
+    const g = [];
+    for (let i = 0; i < 12; i++) g.push('甲：你好' + i + '，今日點呀？', '乙：好好呀，多謝。');
+    g.push('甲：我有一個很長的故事要講，', '從前有座山，', '(合)\t啦啦啦，', '(合)\t啦啦啦啦。');
+    const lines = T.buildLines({ text: g.join('\n') }).lines;
+    const callApi = async p => {
+      if (p.mode === 'format') return JSON.stringify({ roles: [{ id: '甲', name: '甲' }, { id: '乙', name: '乙' }], rules: { speaker_pos: 'prefix' } });
+      if (p.mode === 'roles') return p.candidates.map(c => c[0] + '|N|').join('\n');
+      const ids = new Set(p.roles.map(r => r.id));
+      return p.lines.map(([n, text]) => { const w = text.split('：')[0]; return n + (ids.has(w) ? '|S|' + w : text === '從前有座山，' ? '|C|' : '|N|'); }).join('\n');
+    };
+    const r = await T.runPipeline({ lines, callApi, concurrency: 1, chunkSize: 150 });
+    const L = r.scenes.flatMap(s => s.lines), song = L.find(l => l.song !== undefined);
+    eq(song.lyrics, ['(合)　啦啦啦，', '(合)　啦啦啦啦。'], '前一句台詞的續行「從前有座山，」不被吸進歌詞');
+    ok(L.some(l => l.s === '甲' && /從前有座山/.test(l.t)), '續行仍接在台詞後面');
+  }
   // 進度回報
   {
     const seen = [];
