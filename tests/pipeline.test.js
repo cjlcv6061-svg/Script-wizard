@@ -140,6 +140,52 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(got(33).label === 'N', '句子裡的逗號不是合說：「無人需要我留低，好自由，…：」不被當前綴');
     ok([28, 29, 30, 31, 32].every(n => !got(n).rv), '這幾行是確定的，不標待校正');
   }
+  // 劇本只是整份文件的一部分（論文）：前綴行占比被稀釋（<25%），但很多（≥100 且 ≥10%）且集中在已知角色上，也啟用前綴規則
+  {
+    const rl6 = [{ id: '阿宏', name: '阿宏', aliases: [] }, { id: '阿燈', name: '阿燈', aliases: [] }];
+    const doc = []; for (let i = 0; i < 150; i++) doc.push('阿宏：句' + i, '阿燈：回' + i);
+    for (let i = 0; i < 900; i++) doc.push('這是論文的說明文字第' + i + '行，沒有說話者。');
+    ok(T.detectPrefix(mk(doc), rl6).on, '300 行前綴／1200 行（25%）：啟用');
+    const diluted = doc.concat(Array.from({ length: 1300 }, (_, i) => '論文說明文字續' + i + '，沒有說話者。'));
+    ok(T.detectPrefix(mk(diluted), rl6).on, '300 行前綴／2500 行（12%，≥100 且 ≥10%）：啟用');
+    const tooDiluted = doc.concat(Array.from({ length: 4000 }, (_, i) => '論文說明文字續' + i + '，沒有說話者。'));
+    ok(!T.detectPrefix(mk(tooDiluted), rl6).on, '300 行前綴／5200 行（<10%）：不啟用');
+    const fewPrefix = []; for (let i = 0; i < 40; i++) fewPrefix.push('阿宏：句' + i, '阿燈：回' + i);
+    for (let i = 0; i < 400; i++) fewPrefix.push('說明文字第' + i + '行，沒有說話者。');
+    ok(!T.detectPrefix(mk(fewPrefix), rl6).on, '只有 80 行前綴（<100）：不因寬鬆規則啟用');
+  }
+  // 劇本以外的內容：離台詞很遠的指示／標題改雜訊；論述裡孤立的引文改雜訊（劇本裡夾在台詞中間的引號台詞留著）
+  {
+    const mkl = arr => arr.map((t, i) => ({ n: i + 1, text: t }));
+    const rows = [];                                                    // [文字, 標籤]
+    for (let i = 0; i < 6; i++) rows.push(['這是論文前言第' + i + '行說明。', 'D']);
+    rows.push(['前言章節標題', 'H']);
+    for (let i = 0; i < 70; i++) rows.push(['這是論文前言填充行' + i + '。', 'D']);
+    rows.push(['第一場', 'H'], ['（燈亮。）', 'D']);
+    for (let i = 0; i < 30; i++) rows.push(['甲：第' + i + '句。', 'S'], ['乙：好。', 'S']);
+    rows.push(['乙：「他說他不來了。」', 'S'], ['甲：真的？', 'S'], ['（甲轉身離開。）', 'D']);
+    for (let i = 0; i < 80; i++) rows.push(['這是論文論述第' + i + '行。', 'D']);
+    rows.push(['甲：「我記得他說過這句話。」', 'S'], ['這是引文後面的續行。', 'C']);
+    for (let i = 0; i < 70; i++) rows.push(['論述結尾文字' + i + '。', 'D']);
+    const lines = mkl(rows.map(r => r[0])), labels = new Map(rows.map((r, i) => [i + 1, { label: r[1], role: r[1] === 'S' ? r[0].split('：')[0] : '' }]));
+    const r = T.trimNonScript(lines, labels), at = t => labels.get(lines.findIndex(l => l.text === t) + 1).label;
+    eq(at('這是論文前言第0行說明。'), 'N', '離台詞很遠的前言指示改雜訊');
+    eq(at('前言章節標題'), 'N', '離台詞很遠的標題改雜訊');
+    eq(at('第一場'), 'H', '緊鄰台詞的場次標題留著');
+    eq(at('（燈亮。）'), 'D', '夾在台詞旁的舞台指示留著');
+    eq(at('（甲轉身離開。）'), 'D', '台詞後的舞台指示留著');
+    eq(at('乙：「他說他不來了。」'), 'S', '夾在台詞中間的引號台詞留著');
+    eq(at('甲：「我記得他說過這句話。」'), 'N', '論述裡孤立的引文改雜訊');
+    eq(at('這是引文後面的續行。'), 'N', '引文後面離劇本很遠的續行改雜訊');
+    ok(r.quotes === 1 && r.far > 100, '回報：引文 1 行、遠離劇本 ' + r.far + ' 行');
+    // 台詞很少（<50）：整份不動
+    const few = mkl(['（說明）', '甲：好。', '（說明）']), fl = new Map([[1, { label: 'D', role: '' }], [2, { label: 'S', role: '甲' }], [3, { label: 'D', role: '' }]]);
+    eq(T.trimNonScript(few, fl), { quotes: 0, far: 0 }, '台詞少於 50 行：不動');
+    // 台詞行大多以引號起頭的劇本：不當引文
+    const qr = []; for (let i = 0; i < 60; i++) qr.push(['甲：「第' + i + '句。」', 'S']); for (let i = 0; i < 80; i++) qr.push(['說明' + i, 'D']); qr.push(['乙：「孤立的一句。」', 'S']);
+    const ql = mkl(qr.map(x => x[0])), qlab = new Map(qr.map((x, i) => [i + 1, { label: x[1], role: x[1] === 'S' ? x[0].split('：')[0] : '' }]));
+    eq(T.trimNonScript(ql, qlab).quotes, 0, '台詞大多以引號起頭（≥10%）：不當引文');
+  }
   // 縮寫合說：「老人甲/乙：」＝老人甲＋老人乙（後面的稱呼借用第一個稱呼的開頭）
   {
     const rl5 = [{ id: '老人甲', name: '老人甲', aliases: [] }, { id: '老人乙', name: '老人乙', aliases: [] }, { id: '魔老', name: '魔老', aliases: [] }];
