@@ -80,7 +80,7 @@ if (withDocs) {
     const id = f.replace(/\.[^.]+$/, '');
     if (want !== 'all' && !want.split(',').includes(id)) continue;
     const g = JSON.parse(fs.readFileSync(path.join(dir, id + '.gold.json'), 'utf8'));
-    sources.push({ id, kind: f.endsWith('.pdf') ? 'pdf' : 'docx', desc: g.desc, gold: g.gold, input: () => extractFile(path.join(dir, f), TSP) });
+    sources.push({ id, kind: f.endsWith('.pdf') ? 'pdf' : 'docx', desc: g.desc, gold: g.gold, partial: !!g.partial, input: () => extractFile(path.join(dir, f), TSP) });
   }
 }
 // 真實劇本：--real <目錄>，每份 <id>.docx|.pdf|.txt 旁放 <id>.gold.json（{roles?, gold:[{text,label,role}]}，格式同合成劇本）
@@ -116,7 +116,7 @@ for (const src of sources) {
     labels = r.labels; scenes = r.scenes; stats = r.stats;
   }
   const lab = scoreLabels(lines, labels, src.gold);
-  const e2e = src.real ? { fidelity: NaN, textFidelity: NaN, scenes: { assembled: scenes.length, original: 0 } } : scoreScript(scenes, groundTruth);
+  const e2e = (src.real || src.partial) ? { fidelity: NaN, textFidelity: NaN, scenes: { assembled: scenes.length, original: 0 } } : scoreScript(scenes, groundTruth);   // 真實劇本、只用了原劇本一部分的版面（partial）沒有可對照的完整原劇本
   results.push({ id: src.id, kind: src.kind, desc: src.desc, lines: lines.length, preRemoved: built.removed.length, label: lab, e2e, stats });
   const pct = x => (x * 100).toFixed(2).padStart(6) + '%';
   console.log(`${src.id.padEnd(20)} ${String(lines.length).padStart(5)} 行  行級 ${pct(lab.acc)}  對齊行 ${pct(lab.accAligned)}  ` +

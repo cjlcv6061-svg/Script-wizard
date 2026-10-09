@@ -1326,15 +1326,35 @@ const TSP=(function(){
   const VERT_MAP={'︵':'（','︶':'）','︷':'｛','︸':'｝','︹':'〔','︺':'〕','︻':'【','︼':'】','︽':'《','︾':'》','︿':'〈','﹀':'〉','﹁':'「','﹂':'」','﹃':'『','﹄':'』','︙':'…','︱':'—','︰':'：'};
   const fromVert=c=>VERT_MAP[c]||c.normalize('NFKC');
   const CJK_GAP=new RegExp('(?<=['+CJK_C+'])[ \\t]+(?=['+CJK_C+'])','g');
-  // opts.nameKeys：整份文件判斷出的名字欄（見 detectNameColumns）；opts.collect：Map，累計這一頁的候選欄位次數（供文件層級判斷用）
-  function itemsToLines(items, opts){
-    const its=items.filter(it=>it && typeof it.str==='string' && it.transform)
+  const LATIN_NAME=/^[A-Za-z][A-Za-z.'’-]*$/;                   // 說話者欄的名字（已去空白）全是拉丁字母
+  // pdf.js 文字項目 → {str,x,y,fs,w,h,dir}；直排專用的標點字形先還原成一般標點
+  function normItems(items){
+    return items.filter(it=>it && typeof it.str==='string' && it.transform)
       .map(it=>({str:it.str.replace(VERT_FORMS,fromVert), x:it.transform[4], y:it.transform[5], fs:Math.abs(it.transform[0])||Math.abs(it.transform[2])||it.height||10, w:it.width||0, h:it.height||0, dir:it.dir}));
+  }
+  function isVertical(its){
     let vChars=0, allChars=0;
     for(const it of its){ const n=it.str.replace(/\s/g,'').length; allChars+=n; if(it.dir==='ttb') vChars+=n; }
-    const vertical=allChars>0 && vChars/allChars>0.5;
+    return allChars>0 && vChars/allChars>0.5;
+  }
+  // 依 y 分列（由上到下），列內由左到右
+  function groupRows(its){
+    const rows=[];
+    for(const it of its.slice().sort((a,b)=> (b.y-a.y) || (a.x-b.x))){
+      const last=rows[rows.length-1];
+      const tol=Math.max(2,it.fs*0.45);
+      if(last && Math.abs(last.y-it.y)<=tol){ last.items.push(it); }
+      else rows.push({y:it.y, items:[it]});
+    }
+    for(const r of rows) r.items.sort((a,b)=>a.x-b.x);
+    return rows;
+  }
+  // opts.nameKeys：整份文件判斷出的名字欄（見 detectNameColumns）；opts.collect：Map，累計這一頁的候選欄位次數（供文件層級判斷用）；
+  // opts.cols：整份文件的雙欄版面（見 detectColumnLayout）。有的話先把這一頁依欄切開，左欄讀完才讀右欄
+  function itemsToLines(items, opts){
+    const its=normItems(items);
     const out=[];
-    if(vertical){
+    if(isVertical(its)){
       its.sort((a,b)=>b.x-a.x);
       const cols=[];
       for(const it of its){
@@ -1349,22 +1369,21 @@ const TSP=(function(){
       }
       return out;
     }
-    its.sort((a,b)=> (b.y-a.y) || (a.x-b.x));
-    const rows=[];
-    for(const it of its){
-      const last=rows[rows.length-1];
-      const tol=Math.max(2,it.fs*0.45);
-      if(last && Math.abs(last.y-it.y)<=tol){ last.items.push(it); }
-      else rows.push({y:it.y, items:[it]});
-    }
-    for(const r of rows) r.items.sort((a,b)=>a.x-b.x);
+    const g=opts && opts.cols ? splitColumns(its,opts.cols) : null;
+    if(g) return [g.top,g.left,g.right,g.bottom].reduce((acc,part)=>acc.concat(horizontalLines(part,opts)),[]);
+    return horizontalLines(its,opts);
+  }
+  // 橫排：每一列成一行
+  function horizontalLines(its, opts){
+    const out=[];
+    const rows=groupRows(its);
     // 左欄寫說話者、右欄寫台詞、中間沒有冒號的版面（論文式劇本、表格式劇本）：
     // 整頁有一組固定的（名字欄 x，台詞欄 x），且至少 4 行、占有字行數的 20% 以上，就在名字後補「：」。
     const nameCell=r=>{
       const ns=r.items.filter(i=>i.str.trim()); if(ns.length<2) return null;
       const a=ns[0], b=ns[1], nm=a.str.replace(/\s+/g,'');
-      if(!nm || nm.length>6 || /[：:。！？，,.!?)）]$/.test(nm) || /^[\d(（]/.test(nm) || SCENE_NO_RE.test(nm)) return null;       // 「第一場　求神 …… 5」這種目錄不是說話者欄
-      if(b.x-(a.x+a.w)<Math.max(5,a.fs*0.7)) return null;                       // 名字與台詞之間要有明顯的欄距
+      if(!nm || nm.length>(LATIN_NAME.test(nm)?12:6) || /[：:。！？，,.!?)）]$/.test(nm) || /^[\d(（]/.test(nm) || SCENE_NO_RE.test(nm)) return null;       // 「第一場　求神 …… 5」這種目錄不是說話者欄；拉丁字母的名字（Anthony、Christina）可以長到 12 字
+      if(b.x-(a.x+a.w)<Math.max(5,a.fs*0.6)) return null;                       // 名字與台詞之間要有明顯的欄距（字間空白約 0.3 倍字級；名字撐滿名字欄時，欄距只剩 0.6 倍）
       return {a, key:Math.round(a.x)+'|'+Math.round(b.x), x1:Math.round(a.x)};
     };
     const keyCount=new Map(); let textRows=0;
@@ -1393,14 +1412,120 @@ const TSP=(function(){
   }
   // 整份文件判斷名字欄：長段台詞的頁面名字行占比低（<20%），單頁判斷會放棄，但名字欄的位置在全文是固定的。
   // 台詞欄的 x 會隨名字長短變動（兩字名與四字名的台詞起點不同），所以只看名字欄的 x：
-  // 候選行（行首短名字、後面隔著明顯欄距）的名字欄 x 在全文累計 ≥12 次、且占全部候選的 40% 以上才算。pagesItems：每頁的 pdf.js 文字項目。
-  function detectNameColumns(pagesItems){
-    const m=new Map();
-    for(const items of pagesItems) itemsToLines(items,{collect:m});
+  // 候選行（行首短名字、後面隔著明顯欄距）的名字欄 x 在全文累計 ≥12 次、且占全部候選的 40% 以上才算。
+  // pagesItems：每頁的 pdf.js 文字項目；opts.cols：整份文件的雙欄版面（要先照欄切開，名字才會排在行首）。
+  function detectNameColumns(pagesItems, opts){
+    const m=new Map(), cols=opts && opts.cols;
+    for(const items of pagesItems) itemsToLines(items,{collect:m, cols});
     let total=0; for(const n of m.values()) total+=n;
     const keys=new Set();
     for(const [k,n] of m) if(n>=12 && n>=total*0.4) keys.add(k);
     return keys;
+  }
+
+  // ---- 雙欄版面（書籍式：每頁兩欄，左欄讀完才讀右欄；劇本選集、得獎劇本集常見）----
+  // pdf.js 只給座標、沒有「欄」的概念；兩欄的基線常常對齊，左欄的一行和右欄的一行就被接成一行，閱讀順序也亂了
+  // （名字、台詞、指示全部交錯，偵測到的台詞行少掉近一半）。
+  // 作法：整份文件決定一組版面——欄位切點 cut（兩欄中間沒有任何項目橫跨的空白帶）、右欄相對左欄的位移 dx、內文行距 pitch；
+  // 每頁依切點把項目分成左欄、右欄，各自成行（先左後右），右欄的 x 減掉 dx，讓兩欄的名字欄／台詞欄 x 對齊（名字欄偵測看的是 x）。
+  // 頁眉頁尾——最上、最下各至多 2 列，和內文之間隔著 >2.5 倍行距（字比內文小的話 >1.5 倍）、或橫跨兩欄——不進分欄，依序放在整頁最前、最後
+  // （頁尾若在左半邊，不先分出去就會卡在左欄與右欄之間，頁眉頁尾的刪除規則看不到它）。
+  // 內文裡有橫跨兩欄的列、或這份文件沒有偵測到雙欄版面，就維持原本的行為（同一水平線的字併成一行）。
+  const COL_FURN_GAP=2.5;
+  // 一頁的欄間空白：去掉最上、最下各 2 列（頁眉頁尾、橫跨兩欄的標題常在這裡）之後，在內文範圍正中央（38%–62%）
+  // 找沒有任何項目橫跨的最寬一段 x 區間（≥14pt），左右兩邊各要有 ≥8 個項目且各占 ≥25%。不是乾淨的雙欄就回傳 null。
+  function pageGutter(its){
+    const rows=groupRows(its.filter(o=>o.str.trim()));
+    if(rows.length<8) return null;
+    const core=[].concat(...rows.slice(2,-2).map(r=>r.items));
+    if(core.length<16) return null;
+    const minX=Math.min(...core.map(o=>o.x)), range=Math.max(...core.map(o=>o.x+o.w))-minX;
+    if(range<200) return null;
+    let best=null, from=null, last=null;
+    const close=()=>{ if(from!==null && last-from>=14 && (!best || last-from>best.hi-best.lo)) best={lo:from, hi:last}; from=null; };
+    for(let c=minX+range*0.38; c<=minX+range*0.62; c+=2){
+      if(core.some(o=>o.x<c && o.x+o.w>c)) close(); else { if(from===null) from=c; last=c; }
+    }
+    close();
+    if(!best) return null;
+    // 空白帶超出中央區域的部分也算進來（字短、欄間很寬的頁面），切點才會落在整條空白帶的正中央
+    const clear=c=>!core.some(o=>o.x<c && o.x+o.w>c);
+    let {lo,hi}=best;
+    while(lo-2>minX && clear(lo-2)) lo-=2;
+    while(hi+2<minX+range && clear(hi+2)) hi+=2;
+    const cut=(lo+hi)/2;
+    const left=core.filter(o=>o.x<cut), right=core.filter(o=>o.x>=cut);
+    if(left.length<8 || right.length<8 || Math.min(left.length,right.length)/core.length<0.25) return null;
+    return {lo, hi, minL:Math.min(...left.map(o=>o.x)), minR:Math.min(...right.map(o=>o.x))};
+  }
+  // 整份文件的雙欄版面：至少 4 頁、且占有字頁數 40% 以上的頁面是乾淨的雙欄，而且這些頁的欄間空白有共同的重疊處
+  // （≥70% 的頁涵蓋同一個切點）。回傳 {cut, dx, pitch, pages, of}，不是雙欄回傳 null。
+  function detectColumnLayout(pagesItems){
+    const ev=[]; let textPages=0;
+    for(const items of pagesItems){
+      const its=normItems(items);
+      if(isVertical(its) || its.filter(o=>o.str.trim()).length<8) continue;                // 直排、封面、章名頁不算
+      textPages++;
+      const g=pageGutter(its); if(g){ g.its=its; ev.push(g); }
+    }
+    if(ev.length<4 || ev.length<textPages*0.4) return null;
+    // 切點：被最多頁的欄間空白涵蓋的那一段（有好幾段就取最寬的）的正中央
+    const ends=[...new Set(ev.flatMap(g=>[g.lo,g.hi]))].sort((p,q)=>p-q);
+    let regions=[], bestN=0;
+    for(let i=0;i<ends.length-1;i++){
+      const a=ends[i], b=ends[i+1], m=(a+b)/2, n=ev.filter(g=>g.lo<=m && g.hi>=m).length;
+      if(n>bestN){ bestN=n; regions=[{lo:a, hi:b}]; }
+      else if(n===bestN && n>0){ const r=regions[regions.length-1]; if(r.hi===a) r.hi=b; else regions.push({lo:a, hi:b}); }
+    }
+    if(!regions.length || bestN<ev.length*0.7) return null;
+    regions.sort((p,q)=>(q.hi-q.lo)-(p.hi-p.lo));
+    const cut=(regions[0].lo+regions[0].hi)/2;
+    const good=ev.filter(g=>g.lo<=cut && g.hi>=cut);
+    const dxs=good.map(g=>g.minR-g.minL).sort((p,q)=>p-q);
+    const dx=dxs[Math.floor(dxs.length/2)];
+    // 內文行距：各欄「相鄰兩列的間距」裡，出現次數 ≥ 最常見者 1/4 的最小值（段落之間空一行的 2 倍間距也很常見，不能取眾數）
+    const hist=new Map();
+    for(const g of good){
+      const text=g.its.filter(o=>o.str.trim());
+      for(const side of [text.filter(o=>o.x<cut), text.filter(o=>o.x>=cut)]){
+        const rows=groupRows(side);
+        for(let i=1;i<rows.length;i++){ const d=Math.round(rows[i-1].y-rows[i].y); if(d>=6) hist.set(d,(hist.get(d)||0)+1); }
+      }
+    }
+    let mx=0; for(const n of hist.values()) if(n>mx) mx=n;
+    const pitch=Math.min(...[...hist].filter(([,n])=>n>=mx*0.25).map(([d])=>d));
+    if(!isFinite(pitch)) return null;
+    return {cut, dx, pitch, pages:good.length, of:textPages};
+  }
+  // 依整份文件的版面把一頁（normItems 的結果）切成 {top, left, right, bottom}；右欄已平移 dx。這一頁不適用就回傳 null。
+  function splitColumns(its, L){
+    const rows=groupRows(its).filter(r=>r.items.some(o=>o.str.trim()));
+    const n=rows.length;
+    if(n<2) return null;
+    const fsOf=rs=>[].concat(...rs.map(r=>r.items.filter(o=>o.str.trim()).map(o=>o.fs))).sort((p,q)=>p-q);
+    const allFs=fsOf(rows), bodyFs=allFs[Math.floor(allFs.length/2)];
+    const spans=r=>r.items.some(o=>o.str.trim() && o.x<L.cut && o.x+o.w>L.cut);
+    // 頁眉頁尾：和內文隔著 >2.5 倍行距；或隔著 >1.5 倍行距而且字比內文小（頁尾常是小一號的字，內文排滿時空隙只剩 2.5 倍）
+    const far=L.pitch*COL_FURN_GAP, gapAfter=i=>rows[i].y-rows[i+1].y;
+    const furniture=(block,gap)=>gap>far || (gap>far*0.6 && Math.max(...fsOf(block))<bodyFs*0.9);
+    let t=0, b=0;
+    while(t<2 && t<n-1 && spans(rows[t])) t++;
+    if(!t) for(let k=0;k<2 && k<n-1;k++) if(furniture(rows.slice(0,k+1),gapAfter(k))){ t=k+1; break; }
+    while(b<2 && n-1-b>t && spans(rows[n-1-b])) b++;
+    if(!b) for(let k=0;k<2 && n-1-k>t;k++) if(furniture(rows.slice(n-1-k),gapAfter(n-2-k))){ b=k+1; break; }
+    const body=rows.slice(t,n-b);
+    if(body.some(spans)) return null;                                                  // 內文中間有橫跨兩欄的列：不是這份文件的雙欄版面
+    const items=rs=>[].concat(...rs.map(r=>r.items));
+    const all=items(body);
+    return {top:items(rows.slice(0,t)), bottom:items(rows.slice(n-b)),
+            left:all.filter(o=>o.x<L.cut), right:all.filter(o=>o.x>=L.cut).map(o=>Object.assign({},o,{x:o.x-L.dx}))};
+  }
+  // 整份 PDF：每頁的文字項目 → 每頁的行。版面（雙欄、名字欄）都在這裡由整份文件決定；前端與離線評測共用這一個入口。
+  function pdfItemsToPages(pagesItems){
+    let cols=null;
+    try{ cols=detectColumnLayout(pagesItems); }catch(e){ cols=null; }                  // 版面偵測只是加分：出任何問題都退回原本的組行方式，不擋住匯入
+    const nameKeys=detectNameColumns(pagesItems,{cols});
+    return pagesItems.map(items=>itemsToLines(items,{nameKeys, cols}));
   }
   // 每個字之間都有空白（PDF 字距排版：「阿 宏 學 長 去 哪 阿 ！」）：整份文件裡「中日文字－空白－中日文字」的比例超過一半，
   // 就去掉夾在文字之間的空白（兩側至少一邊是中日文字或全形符號；數字與數字之間也去）。英文字母之間的空白無法判斷字界，保留。
@@ -1798,7 +1923,8 @@ const TSP=(function(){
   }
 
   // 場次標題 → {no,name,season,place}（啟發式；使用者可在校正頁修正）
-  const SCENE_NO_RE=/^(序場|序幕|序章|楔子|尾聲|終場|終幕|第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節]|(?:scene|act)\s*[0-9ivx]+)/i;
+  // 「開場」「結局」「序」這類單詞只在單獨成行、或後面接空白／冒號／括號（再接短標題）時才算標題——不吃「開場白」「序曲」「結局是…」
+  const SCENE_NO_RE=/^(序場|序幕|序章|楔子|尾聲|終場|終幕|(?:開場|開幕|閉幕|結局|序)(?![^\s　：:﹕『「（(【\[])|第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節]|(?:scene|act)\s*[0-9ivx]+)/i;
   const SEASON_RE=/^[『「（(【\[][^』」）)】\]]{1,6}[』」）)】\]]$/;
   function parseHeading(text){
     let t=String(text||'').replace(/^[=＝\-—\s　*#]+|[=＝\-—\s　*#]+$/g,'');
@@ -1808,7 +1934,10 @@ const TSP=(function(){
     const toks=t.split(/[\s　]+/).filter(k=>k && !/^[=＝\-—*#]+$/.test(k));   // 去掉裝飾用的 === 之類
     const rest=[];
     for(const k of toks){ if(!out.season && SEASON_RE.test(k)) out.season=k; else rest.push(k); }
-    if(rest.length){ out.name=rest[0]; out.place=rest.slice(1).join(' '); }
+    if(rest.length){
+      if(/^[0-9０-９]/.test(rest[0])) out.name=rest.join(' ');                   // 「第一場 1879 至 1882 年」：整段是場名（年份、時間），不是「場名＋地點」
+      else{ out.name=rest[0]; out.place=rest.slice(1).join(' '); }
+    }
     if(!m && !out.season && toks.length) { out.no=''; out.name=toks.join(' '); out.place=''; }
     return out;
   }
@@ -1831,6 +1960,7 @@ const TSP=(function(){
       if(t.length<=16 && END_MARK_RE.test(t.trim())){ put(L.n,'D'); pending=null; continue; }       // 「第二幕完」不是新的一幕
       if(SCENE_NO_RE.test(t.replace(/^[=＝\-—\s　*#]+/,'')) && t.length<=60){ put(L.n,'H'); pending=null; continue; }
       if(isPageNumberLine(t,false) || /^[-–—~]\s*[0-9０-９]{1,4}\s*[-–—~]$/.test(t)){ put(L.n,'N'); continue; }
+      if(fmMarker(t)){ put(L.n,'N'); pending=null; continue; }                  // 「角色表」「分場表」「編劇的話」：不是續行也不是指示
       const sp=(!sep || pfxMatch(t,sep,surf))?splitSpeakerPrefix(t,surf):null;
       if(sp){ put(L.n,'S',sp.ids.filter((x,i,ar)=>ar.indexOf(x)===i).join('/')); pending=null; continue; }
       if(/^(?:[（(].*[）)]|【.*】)$/.test(t)){ put(L.n,'D'); continue; }
@@ -1913,7 +2043,9 @@ const TSP=(function(){
     let sum=0; for(const [t,c] of cnt) if(surfGet(surf,t)||c>=3) sum+=c;
     // 模型沒列出的稱呼要夠常見才補成角色（誤補會讓一般句子被強制標成台詞，比漏補嚴重）：排除偶然出現的「Well – 」「他說：」
     const minCount=Math.max(5,Math.ceil(sum*0.05));
-    const isRole=t=>surfGet(surf,t)||cnt.get(t)>=minCount||NARR_RE.test(t);
+    // 封面的「編劇：某某」不是角色（劇本集每份劇本都有一行）；真的有人叫「導演」的戲，他的台詞會多到超過 3 倍門檻，模型自己列的角色不受影響
+    const need=t=>CREDIT_SET.has(t)?minCount*3:minCount;
+    const isRole=t=>surfGet(surf,t)||cnt.get(t)>=need(t)||NARR_RE.test(t);
     let prefixLines=0; for(const l of lines){ const ts=parts(l); if(ts.length && ts.every(isRole)) prefixLines++; }
     // 前綴行要占 25% 以上才啟用；劇本只是整份文件的一部分（論文、附說明的劇本）時比例會被稀釋，
     // 所以前綴行很多（≥100 且 ≥10%）、而且全落在「已知角色或常出現的稱呼」上也算
@@ -1939,10 +2071,23 @@ const TSP=(function(){
       if(owners.length===1){ owners[0].aliases.push(t); surf2.set(t,owners[0].id); continue; }
       out.push({id, name:id, aliases:[], gender:'n'}); added.push(id);
     }
+    // 縮寫合說：「說／問：」「父／母：」是單字簡稱，單字是某個角色名稱的一部分（不能說／不要問、父親／母親）。
+    // 名稱以這個字開頭的角色恰好一個就是它；沒有的話，名稱含有這個字的角色恰好一個就是它；兩個以上就不猜（那幾行維持待校正）。
+    // 補成別名，後面的前綴覆寫、組回、校正頁全部看得懂這個寫法。
+    const comboCnt=new Map();
+    for(const l of lines){ const m=pfxMatch(l.text,sep); if(m && m.toks.length>1) for(const t of m.toks) comboCnt.set(t,(comboCnt.get(t)||0)+1); }
+    const abbrev=new Set();
+    for(const [t,c] of comboCnt){
+      if(c<2 || t.length>2 || surfGet(surf2,t)) continue;
+      const longer=r=>[r.id,r.name].concat(r.aliases||[]).filter(x=>x && x.length>t.length);
+      const starts=out.filter(r=>longer(r).some(x=>x.startsWith(t)));
+      const owners=starts.length?starts:out.filter(r=>longer(r).some(x=>x.includes(t)));
+      if(owners.length===1){ owners[0].aliases.push(t); surf2.set(t,owners[0].id); abbrev.add(t); }
+    }
     // 候選稱呼表（交給模型判斷哪些是角色）：模型第一段沒列出、但行首出現過的稱呼（依次數排序，最多 150 個），各附一行例句
     const ex=new Map(); for(const l of lines){ const m=pfxMatch(l.text,sep); if(m) for(const t of m.toks) if(!ex.has(t)) ex.set(t,l.text); }
-    const candidates=[...cnt].filter(([t])=>!surfGet(surf,t) && !NARR_RE.test(t) && t.length<=24 && !/[|｜]/.test(t)).sort((x,y)=>y[1]-x[1]).slice(0,150).map(([t,c])=>[t,c,(ex.get(t)||'').slice(0,80)]);
-    return {on:true, roles:out, prefixLines, added, sep, candidates};
+    const candidates=[...cnt].filter(([t,c])=>!surfGet(surf,t) && !NARR_RE.test(t) && t.length<=24 && !/[|｜]/.test(t) && (!CREDIT_SET.has(t) || c>=need(t)) && !abbrev.has(t)).sort((x,y)=>y[1]-x[1]).slice(0,150).map(([t,c])=>[t,c,(ex.get(t)||'').slice(0,80)]);
+    return {on:true, roles:out, prefixLines, added, sep, candidates, abbrev:[...abbrev]};
   }
   // 標記完成後套用：有已知前綴的行一律是台詞；沒有前綴卻被標成台詞的行改用規則標並標為待校正；
   // 夾著別人前綴的行標為待校正。labels 會被就地修改。
@@ -2167,6 +2312,127 @@ const TSP=(function(){
     }
     return cast;
   }
+  // ---------- 前言區塊（作者簡介、編劇的話、角色表、分場表）與場次清單 ----------
+  // 劇本集裡每份劇本的前面：封面（標籤、劇名、「編劇 某某」）→ 作者簡介 → 編劇的話 → 角色表／分場表 → 正文。
+  // 它們不是劇本，卻離兩邊的台詞很近（簡介加角色表常常不到 60 行，「遠離劇本」清不掉），模型標成指示、續行、標題或台詞都有。
+  // 起點＝封面署名行（編劇／導演＋人名；往上併入緊鄰的短行，通常是標籤與劇名）或標記行（編劇的話、角色表、分場表、目錄…）。
+  //   起點必須在第一句台詞之前、或緊接在幕尾標記（全劇完）之後：劇本中間冒出的「導演 某某」「目錄」不動。
+  // 終點（正文開始）：整行括號的舞台指示；標題（一串標題的最後一個，後面緊接內容）；或台詞（角色表之後說話者重複，
+  //   或內容像台詞：有「我／你」、驚嘆號、問號、太長）。
+  // 起點到終點之間的台詞、續行、指示、標題一律改雜訊。150 行內找不到終點就一行都不動——寧可留著，也不能吞掉劇本。
+  const FM_CAP=150;
+  const FM_CAST=['角色表','人物表','人物介紹','角色介紹','人物簡介','角色簡介','登場人物','出場人物','演員表','演員陣容'];
+  const FM_NOTE=['編劇的話','導演的話','作者的話','編導的話','創作理念','創作感言','創作歷程','編劇簡介','導演簡介','作者簡介','劇情簡介','劇目簡介','故事大綱','劇本大綱','劇情大綱','分場表','場次表','目錄','目次','前言','序言','後記','鳴謝'];
+  const FM_WORDS=new Set(FM_CAST.concat(FM_NOTE)), FM_CAST_SET=new Set(FM_CAST);
+  const FM_FUSED_RE=/^(?:編劇的話|導演的話|作者的話|編導的話|創作感言)[\s　：:﹕]+\S/;       // 標題和內文的第一行擠在同一行
+  // 標記行：整行只有標記詞（「角色表　分場表」兩欄並排、帶冒號都算）。回傳 'cast'（角色表一類）、'note'（其他）或 null
+  const fmMarker=t=>{
+    t=String(t||'').trim();
+    if(FM_FUSED_RE.test(t)) return 'note';
+    if(!t || t.length>24) return null;
+    const ws=t.split(/[\s　：:﹕]+/).filter(Boolean);
+    if(!ws.length || !ws.every(w=>FM_WORDS.has(w))) return null;
+    return ws.some(w=>FM_CAST_SET.has(w))?'cast':'note';
+  };
+  // 職掌稱呼：封面的「編劇 某某」不是台詞，也不是角色（但真的有人叫「導演」、台詞很多的戲，見 detectPrefix）
+  const CREDIT_WORDS=['編劇','導演','編導','作者','原著','改編','翻譯','譯者','監製','製作人','作曲','作詞','編曲','填詞','劇作','撰稿','統籌','策劃','顧問'];
+  const CREDIT_SET=new Set(CREDIT_WORDS);
+  const FM_CREDIT_RE=new RegExp('^(?:'+CREDIT_WORDS.join('|')+')(?:[\\s　]*[：:﹕][\\s　]*|[\\s　]+)\\S');
+  const fmCredit=t=>{ t=String(t||'').trim(); return t.length<=60 && FM_CREDIT_RE.test(t) && !/[。！？!?]/.test(t); };
+  const FM_SCENE_TOK=/第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節]/;
+  // 像標題的行（含「不能說　第一場　我們打京城來」這種角色表與分場表並排時被併成一行的）
+  const fmHead=(t,L)=>{ t=String(t||'').trim(); return !!t && t.length<=40 && (L==='H' || FM_SCENE_TOK.test(t) || SCENE_NO_RE.test(t)); };
+  const fmBracket=t=>{ t=String(t||'').trim(); return t.length>=5 && /^[（(【\[].+[）)】\]]$/.test(t); };
+  // 場次標題的比對用字串：從「第N場」起、去掉空白與冒號（「Christina：第一場 手繩，畢業證書」→「第一場手繩，畢業證書」）
+  const fmKey=t=>{ t=String(t||'').trim(); const m=t.match(/第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節].*$/); return (m?m[0]:t).replace(/[\s　：:﹕]+/g,''); };
+  function trimFrontMatter(lines, labels){
+    const N=lines.length, lab=i=>(labels.get(lines[i].n)||{label:'N'}).label, txt=i=>lines[i].text.trim();
+    const who=i=>{ const m=pfxMatch(lines[i].text,null); return m?m.toks.join('/'):((labels.get(lines[i].n)||{}).role||''); };
+    const restOf=i=>{ const m=txt(i).match(/^[^：:]{1,24}[：:]\s*([\s\S]*)$/); return m?m[1]:txt(i); };
+    const isEnd=i=>i>=0 && i<N && txt(i).length<=16 && END_MARK_RE.test(txt(i));
+    let firstS=N; for(let i=0;i<N;i++){ const L=lab(i); if(L==='S' || L==='Y'){ firstS=i; break; } }
+    // 角色表裡的一列：有簡介用語；或（已經進了角色表區塊、說話者沒出現過）短短的、沒有人稱代名詞與驚嘆號問號
+    const castRow=(k,inCast,seen)=>isCastBody(txt(k)) || (inCast && !(seen && seen.has(who(k))) && restOf(k).length<=24 && !/[我你妳您他她咱俺]|[!?！？]/.test(restOf(k)));
+    // 標題後面（4 行內）緊接著正文：整行括號、不像角色表一列的台詞，或一行夠長的描述
+    const contentAfter=(j,inCast)=>{
+      for(let k=j+1;k<N && k<=j+4;k++){
+        const t=txt(k), L=lab(k);
+        if(fmBracket(t)) return true;
+        if(L==='S'){ if(!castRow(k,inCast,null)) return true; continue; }
+        if((L==='D' || L==='C') && t.length>=12 && !fmHead(t,L) && !fmMarker(t) && !/^(?:備註|註|說明|注意)/.test(t)) return true;
+      }
+      return false;
+    };
+    // 標題串：往後相隔 ≤3 行、中間都是填充行（短、不是台詞、不是括號——角色表與分場表並排時，標題之間夾著角色名）的標題
+    const filler=k=>lab(k)!=='S' && !fmBracket(txt(k)) && txt(k).length<=12;
+    const headRun=j=>{
+      const r=[j];
+      for(let k=j+1;k<N && k<=r[r.length-1]+3;k++){
+        if(fmHead(txt(k),lab(k))) r.push(k);
+        else if(!filler(k)) break;
+      }
+      return r;
+    };
+    // 從起點 i0 往後找正文開始的那一行；找不到回傳 -1
+    const findEnd=i0=>{
+      let inCast=false; const seen=new Set();
+      for(let j=i0;j<N && j<i0+FM_CAP;j++){
+        const t=txt(j), L=lab(j), mk=fmMarker(t);
+        if(mk){ inCast=mk==='cast'; continue; }
+        if(j===i0 || fmCredit(t)) continue;                  // 起點本身、連續的署名行（模型常把「編劇：某某」標成台詞）
+        if(fmBracket(t)) return j;
+        if(fmHead(t,L)){
+          const r=headRun(j);
+          if(contentAfter(r[r.length-1],inCast)) return r.length<=2?j:r[r.length-1];      // 一、兩行是（合併的）標題；三行以上是清單，最後一個才是真標題
+          j=r[r.length-1]; continue;
+        }
+        if(L==='S'){
+          if(castRow(j,inCast,seen)){ seen.add(who(j)); continue; }
+          return j;
+        }
+      }
+      return -1;
+    };
+    const starts=[]; for(let i=0;i<N;i++){ const t=txt(i); if(fmMarker(t) || fmCredit(t)) starts.push(i); }
+    let covered=0, total=0;
+    for(const i0 of starts){
+      if(i0<covered) continue;
+      let s=i0;
+      if(fmCredit(txt(i0))){
+        // 往上併入封面的標籤與劇名：緊接在幕尾標記之後就一路併到幕尾標記；否則最多併 2 個緊鄰的短行
+        let e0=-1; for(let k=s-1;k>=0 && k>=s-7;k--) if(isEnd(k)){ e0=k; break; }
+        if(e0>=0) s=e0+1;
+        else for(let k=0;k<2 && s-1>=0;k++){ const t=txt(s-1), L=lab(s-1); if(L==='S' || L==='Y' || t.length>24 || fmHead(t,L) || fmBracket(t)) break; s--; }
+      }
+      if(!(s<=firstS || isEnd(s-1) || isEnd(s-2))) continue;     // 劇本中間冒出來的不動
+      const e=findEnd(i0);
+      if(e<0) continue;
+      for(let k=s;k<e;k++){ const L=lab(k); if(L==='S' || L==='C' || L==='D' || L==='H'){ labels.set(lines[k].n,{label:'N',role:''}); total++; } }
+      covered=e;
+    }
+    return total;
+  }
+  // 場次清單（分場表、目錄）：連續 ≥3 行標題（相隔 ≤3 行），其中「第N場…」的內容在後面又出現（去空白後互相包含）→ 是清單項目，
+  // 不是場次，改雜訊；一串標題裡最後那個沒有再出現的才是真標題。不然這幾行會被併成第一場的標題，場名與地點都被污染。
+  function dedupeSceneList(lines, labels){
+    const N=lines.length, lab=i=>(labels.get(lines[i].n)||{label:'N'}).label, txt=i=>lines[i].text.trim();
+    const isHead=i=>{ const L=lab(i); return (L==='H' || L==='D' || L==='C') && fmHead(txt(i),L) && !(txt(i).length<=16 && END_MARK_RE.test(txt(i))); };
+    const filler=k=>lab(k)!=='S' && !fmBracket(txt(k)) && txt(k).length<=12;
+    const onlyFillers=(a,b)=>{ for(let k=a+1;k<b;k++) if(!filler(k)) return false; return true; };
+    const heads=[]; for(let i=0;i<N;i++) if(isHead(i)) heads.push(i);
+    let cut=0;
+    for(let h=0;h<heads.length;){
+      // 清單：標題之間只隔著填充行（角色名、頁碼之類）；真的場次標題後面都跟著內容（括號指示、台詞）
+      const run=[heads[h]];
+      for(let g=h+1;g<heads.length && heads[g]<=run[run.length-1]+3 && onlyFillers(run[run.length-1],heads[g]);g++) run.push(heads[g]);
+      h+=run.length;
+      if(run.length<3) continue;
+      const hit=run.filter(m=>{ const a=fmKey(txt(m)); return a.length>=2 && heads.some(k=>{ if(k<=m) return false; const b=fmKey(txt(k)); return b.length>=2 && (b.includes(a) || a.includes(b)); }); });
+      if(hit.length<2 || hit.length<run.length*0.6) continue;
+      for(const m of hit){ labels.set(lines[m].n,{label:'N',role:''}); cut++; }
+    }
+    return cut;
+  }
   // 幕／場結束標記（「第二幕完」「全劇完」「劇終」「THE END」）：不是場次標題（不要切出一個叫「完」的場次），
   // 也不是雜訊（它標出一幕的結束，留在劇本裡當指示）
   const END_MARK_RE=/^[\s　*＊=＝\-–—~（(【\[「『]*(?:(?:全劇|全場|本劇|本場|本幕|第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節])\s*)?(?:完結|結束|劇終|終場|落幕|完|終|END|THE END|The End|FIN)[\s　*＊=＝\-–—~）)】\]」』。.!！]*$/;
@@ -2234,6 +2500,7 @@ const TSP=(function(){
     const FAR=farOverride||NONSCRIPT_FAR;
     const lab=i=>labels.get(lines[i].n)||{label:'N'};
     const cast=trimCastTables(lines, labels);
+    const front=trimFrontMatter(lines, labels), list=dedupeSceneList(lines, labels);
     let nS=0, nQ=0;
     for(let i=0;i<lines.length;i++){ const L=lab(i); if(L.label==='S' || L.label==='Y') nS++; }
     // 幕尾標記：標成雜訊或標題、而且就在劇本旁邊的，改成指示
@@ -2246,7 +2513,7 @@ const TSP=(function(){
         if((L==='N' || L==='H') && near[i] && lines[i].text.length<=16 && END_MARK_RE.test(lines[i].text.trim())){ labels.set(lines[i].n,{label:'D',role:''}); ends++; }
       }
     }
-    if(nS<50) return {quotes:0, far:0, cast, ends};
+    if(nS<50) return {quotes:0, far:0, cast, ends, front, list};
     const QUOTE_RE=/^[^：:]{1,16}[：:]\s*[「『“"]/;
     let spoken=0; for(let i=0;i<lines.length;i++) if(lab(i).label==='S') spoken++;
     for(let i=0;i<lines.length;i++) if(lab(i).label==='S' && QUOTE_RE.test(lines[i].text)) nQ++;
@@ -2272,7 +2539,7 @@ const TSP=(function(){
       const L=lab(i).label;
       if((L==='D' || L==='C' || L==='H') && dist[i]>=FAR){ labels.set(lines[i].n,{label:'N',role:''}); farCut++; }
     }
-    return {quotes, far:farCut, cast, ends};
+    return {quotes, far:farCut, cast, ends, front, list};
   }
 
   function assemble(lines, labels, roles, opts){
@@ -2463,15 +2730,15 @@ const TSP=(function(){
     const jb=joinOpenBrackets(lines, labels, pm.on?pm.sep:null, finalRoles, dirPairs);
     const sg=detectSongs(lines, labels, finalRoles, pm.on?pm.sep:null);
     const ns=trimNonScript(lines, labels);
-    if(pm.on && (ns.quotes || ns.cast)){ const t2=tidyRoles(lines, labels, finalRoles, pm.sep); finalRoles=t2.roles; }       // 引文、人物表改雜訊後，沒有台詞的角色不留
+    if(pm.on && (ns.quotes || ns.cast || ns.front)){ const t2=tidyRoles(lines, labels, finalRoles, pm.sep); finalRoles=t2.roles; }       // 引文、人物表、前言區塊改雜訊後，沒有台詞的角色不留
     const asm=assemble(lines, labels, finalRoles, {dirPairs});
     const roles=finalRoles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
     return {roles, rules:fmt.rules, scenes:asm.scenes, labels, dirPairs,
       stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), partialChunkNos:partial.sort((a,b)=>a-b), partialLines, retried, lines:lines.length}, asm.stats,
-        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered, nonScript:ns, joinedBrackets:jb}), errors};
+        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep, abbrev:pm.abbrev}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered, nonScript:ns, joinedBrackets:jb}), errors};
   }
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,numberedEdgeDrops,shapeKey,itemsToLines,detectNameColumns,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,trimCastTables,joinOpenBrackets,detectDirPairs,normPunct,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,numberedEdgeDrops,shapeKey,itemsToLines,detectNameColumns,detectColumnLayout,pdfItemsToPages,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,trimCastTables,trimFrontMatter,dedupeSceneList,joinOpenBrackets,detectDirPairs,normPunct,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 
@@ -4187,8 +4454,7 @@ async function extractPdf(buf){
     const tc=await page.getTextContent();
     pageItems.push(tc.items);
   }
-  const nameKeys=TSP.detectNameColumns(pageItems);       // 左欄說話者／右欄台詞的版面：欄位位置由整份文件決定
-  return pageItems.map(items=>TSP.itemsToLines(items,{nameKeys}));
+  return TSP.pdfItemsToPages(pageItems);                // 雙欄版面、左欄說話者／右欄台詞的名字欄：位置都由整份文件決定
 }
 function decodeText(buf){
   const u=new Uint8Array(buf);

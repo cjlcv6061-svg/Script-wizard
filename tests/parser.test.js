@@ -217,4 +217,92 @@ ok(!T.looksScanned([['偉：你好嗎，今日天氣好好呀，你去咗邊度�
   eq(T.buildLines({ pages: [normal.slice(0, 30), normal.slice(30)] }).lines[0].text, '阿宏：你好呀，今日點呀？ Hello world 0', '一般文件（沒有字距）完全不動');
 }
 
+// ---- 雙欄版面（書籍式：左欄讀完才讀右欄；得獎劇本集）----
+{
+  const it = (str, x, y, w, fs = 10) => ({ str, transform: [fs, 0, 0, fs, x, y], width: w });
+  // 名字（寬度）：長拉丁名字要認得；Christina 與台詞只隔 6.6pt（0.66 倍字級），也要認得
+  const NAMES = [['Anthony', 40.3], ['Christina', 41.4], ['甲', 10], ['乙', 10]];
+  // 一欄：每 3 行有一行是續行（只有台詞欄）；左欄名字 x=57、台詞 x=105，右欄整體右移 269。回傳項目與預期輸出行
+  const column = (p, side, rows, x0) => {
+    const items = [], lines = [];
+    rows.forEach((y, i) => {
+      const cont = i % 3 === 2, text = (cont ? '續' : '第') + p + side + i;
+      if (cont) { items.push(it(text, x0 + 48, y, 60)); lines.push(text); }
+      else { const [nm, w] = NAMES[(i + p) % 4]; items.push(it(nm, x0, y, w), it(text, x0 + 48, y, 60)); lines.push(nm + '： ' + text); }
+    });
+    return { items, lines };
+  };
+  const ys = (n, top = 776, step = 14) => Array.from({ length: n }, (_, i) => top - i * step);
+  const footer = p => p % 2
+    ? { items: [it('劇本選集', 443, 23, 40, 8), it(String(p), 547, 24, 14, 8)], line: '劇本選集 ' + p }          // 奇數頁：靠右
+    : { items: [it(String(p), 35, 24, 18, 8), it('某人 《劇名》', 65, 24, 60, 8)], line: p + ' 某人 《劇名》' };   // 偶數頁：靠左（左半邊）
+  const page = (p, nL, nR, o = {}) => {
+    const L = column(p, '左', o.ysL || ys(nL, o.top), 57), R = column(p, '右', o.ysR || ys(nR, o.top), 326), f = footer(p);
+    const top = o.title ? [it(o.title, 230, 800, 100, 14)] : [];
+    return { items: top.concat(L.items, R.items, f.items, o.extra || []), lines: (o.title ? [o.title] : []).concat(L.lines, R.lines, [f.line]) };
+  };
+  const doc = Array.from({ length: 8 }, (_, k) => page(k + 1, 40, 40));
+  const itemsOf = d => d.map(x => x.items), linesOf = d => d.map(x => x.lines);
+
+  const L = T.detectColumnLayout(itemsOf(doc));
+  ok(L && L.cut > 165 && L.cut < 326, '偵測到雙欄版面：切點在兩欄之間：' + JSON.stringify(L));
+  eq([Math.round(L.dx), L.pitch, L.pages, L.of], [269, 14, 8, 8], '右欄位移、內文行距、涵蓋頁數');
+  const merged = T.itemsToLines(doc[0].items)[0];
+  ok(/左0/.test(merged) && /右0/.test(merged), '（對照）沒有版面資訊時，左右欄同一水平線的字併成一行：' + merged);
+  eq(T.pdfItemsToPages(itemsOf(doc)), linesOf(doc), '先左欄後右欄；名字後補「：」（含 Anthony、Christina）；奇偶頁的頁尾都在頁末');
+
+  // 右欄比左欄短很多（每份劇本最後一頁常這樣）：右欄平移到左欄的 x，兩欄的名字合算才達得到名字欄的門檻（40%）
+  const lopsided = Array.from({ length: 8 }, (_, k) => page(k + 1, 40, 16)).concat([page(9, 3, 1)]);       // 最後一頁右欄只有 1 行：只能靠全文的名字欄
+  eq(T.pdfItemsToPages(itemsOf(lopsided)), linesOf(lopsided), '右欄短：兩欄的名字欄合算，連右欄只有 1 行的稀疏頁也補上冒號');
+  // 內文排滿、頁尾只隔 2.5 倍行距（偶數頁在左半邊）：頁尾比內文小一號，仍要分出去，不能卡在兩欄之間
+  const full = Array.from({ length: 8 }, (_, k) => page(k + 1, 52, 52, { top: 773 }));      // 最後一行 y=59，頁尾 y=24：空隙 35 ＝ 2.5 × 14
+  eq(T.pdfItemsToPages(itemsOf(full)), linesOf(full), '空隙剛好 2.5 倍行距、頁尾字較小：分出去');
+  const sameSize = page(2, 52, 52, { top: 773 });
+  sameSize.items = sameSize.items.map(i => i.transform[0] === 8 ? Object.assign({}, i, { transform: [10, 0, 0, 10, i.transform[4], i.transform[5]] }) : i);
+  const ssOut = T.itemsToLines(sameSize.items, { cols: T.detectColumnLayout(itemsOf(full)), nameKeys: new Set([57]) });
+  ok(ssOut.indexOf('2 某人 《劇名》') > 0 && ssOut.indexOf('2 某人 《劇名》') < ssOut.length - 1, '（已知限制）頁尾和內文一樣大、空隙又只有 2.5 倍行距：無法和內文區分，不分出去');
+
+  // 稀疏頁（疏到單頁看不出雙欄）也套用整份文件的切點；全劇最後一頁常是這樣
+  const sparse = page(9, 3, 1);
+  const withSparse = doc.concat([sparse]);
+  eq(T.pdfItemsToPages(itemsOf(withSparse))[8], sparse.lines, '稀疏頁：左欄 3 行、右欄 1 行、頁尾，順序正確');
+  ok(T.detectColumnLayout(itemsOf(withSparse)).pages === 8, '稀疏頁不算偵測證據');
+
+  // 橫跨兩欄的標題在頁首／頁尾：放在最前／最後；內文中間有橫跨兩欄的列：這一頁不切（維持原本的併行）
+  const titled = page(3, 40, 40, { title: '《約會》' });
+  eq(T.pdfItemsToPages(itemsOf(doc.slice(0, 4).concat([titled])))[4], titled.lines, '頁首的橫跨兩欄標題排在最前面');
+  const mid = page(3, 40, 40, { extra: [it('橫跨兩欄的一長行說明文字', 120, 600 - 7, 300)] });
+  const midOpts = { cols: L, nameKeys: new Set([57]) };
+  eq(T.itemsToLines(mid.items, midOpts), T.itemsToLines(mid.items, { nameKeys: midOpts.nameKeys }), '內文中間橫跨兩欄：這一頁不切');
+
+  // 內文開頭是單行、後面空一行（間距 2 倍行距）：不是頁眉，左欄還是整個讀完才換右欄
+  const gap28 = page(3, 6, 6, { ysL: [776, 748, 734, 720, 706, 692], ysR: [776, 748, 734, 720, 706, 692] });
+  const g28 = T.itemsToLines(gap28.items, { cols: L, nameKeys: new Set([57]) });
+  const iL5 = g28.findIndex(l => /左5$/.test(l)), iR0 = g28.findIndex(l => /右0$/.test(l));
+  ok(iL5 >= 0 && iL5 < iR0, '前兩列空隙 2 倍行距不當頁眉：' + g28.slice(0, 3).join(' / '));
+  // 真正的頁眉（小字、離內文 54pt）
+  const withHeader = page(3, 40, 40, { extra: [it('劇本選集 第三頁', 250, 830, 80, 8)] });
+  eq(T.itemsToLines(withHeader.items, { cols: L, nameKeys: new Set([57]) })[0], '劇本選集 第三頁', '頁首的頁眉排在最前面');
+
+  // 單欄文件（長行橫跨中線）、表格式劇本（名字欄＋很長的台詞欄）：沒有雙欄版面，行為不變
+  const single = Array.from({ length: 8 }, (_, k) => Array.from({ length: 40 }, (_, i) => it('第' + k + '頁第' + i + '行 ' + '很長的一行台詞'.repeat(8), 57, 776 - i * 14, 450)));
+  eq(T.detectColumnLayout(single), null, '單欄：沒有雙欄版面');
+  eq(T.pdfItemsToPages(single), single.map(p => T.itemsToLines(p)), '單欄文件：輸出和原本一致');
+  const table = Array.from({ length: 8 }, (_, k) => Array.from({ length: 24 }, (_, i) => [it(NAMES[(i + k) % 4][0], 57, 776 - i * 28, NAMES[(i + k) % 4][1]), it('這是一句很長很長的台詞' + k + '-' + i + '，'.repeat(2) + '長到橫跨整頁的中線', 105, 776 - i * 28, 380)]).flat());
+  eq(T.detectColumnLayout(table), null, '表格式劇本（台詞很長）：不是雙欄');
+  ok(T.pdfItemsToPages(table)[0][0].startsWith(NAMES[0][0] + '：'), '表格式劇本照舊補冒號：' + T.pdfItemsToPages(table)[0][0]);
+  // 雙欄證據要夠多：至少 4 頁、占有字頁數 40% 以上
+  const sp = single.slice(0, 8), tw = doc.slice(0, 4).map(x => x.items);
+  ok(T.detectColumnLayout(doc.slice(0, 3).map(x => x.items).concat(sp.slice(0, 3))) === null, '只有 3 頁雙欄：不判定');
+  ok(T.detectColumnLayout(tw.concat(sp.slice(0, 4))) !== null, '4 頁雙欄、4 頁單欄（50%）：判定');
+  ok(T.detectColumnLayout(tw.concat(sp.slice(0, 8))) === null, '4 頁雙欄、8 頁單欄（33%）：不判定');
+  // 單欄頁混在雙欄文件裡（長行橫跨切點）：這些頁不切
+  const mixed = itemsOf(doc).concat([single[0]]);
+  eq(T.pdfItemsToPages(mixed)[8], T.itemsToLines(single[0], { nameKeys: T.detectNameColumns(mixed, { cols: T.detectColumnLayout(mixed) }) }), '雙欄文件裡的單欄頁照舊');
+  // 直排文件不做欄位偵測
+  const vert = Array.from({ length: 8 }, () => Array.from({ length: 30 }, (_, i) => ({ str: '直排的一行文字', dir: 'ttb', transform: [10, 0, 0, 10, 500 - i * 14, 700], width: 10, height: 70 })));
+  eq(T.detectColumnLayout(vert), null, '直排：不偵測雙欄');
+  eq(T.detectColumnLayout([]), null, '空文件');
+}
+
 console.log(`✓ parser.test.js：${n} 項通過`);

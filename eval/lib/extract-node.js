@@ -10,12 +10,9 @@ async function extractPdf(file, TSP) {
   const pdfjs = require('pdfjs-dist/legacy/build/pdf.js');
   const doc = await pdfjs.getDocument({ data: new Uint8Array(fs.readFileSync(file)), isEvalSupported: false, useSystemFonts: false, verbosity: 0,
     cMapUrl: require('path').join(__dirname, '../../vendor/cmaps/'), cMapPacked: true }).promise;
-  const pages = [];
-  for (let p = 1; p <= doc.numPages; p++) {
-    const tc = await (await doc.getPage(p)).getTextContent();
-    pages.push(TSP.itemsToLines(tc.items));
-  }
-  return { pages };
+  const pageItems = [];
+  for (let p = 1; p <= doc.numPages; p++) pageItems.push((await (await doc.getPage(p)).getTextContent()).items);
+  return { pages: TSP.pdfItemsToPages(pageItems) };      // 和前端 extractPdf 同一個入口：雙欄版面、名字欄由整份文件決定
 }
 async function extractFile(file, TSP) {
   if (/\.pdf$/i.test(file)) return extractPdf(file, TSP);
