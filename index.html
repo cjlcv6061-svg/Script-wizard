@@ -1923,7 +1923,8 @@ const TSP=(function(){
   }
 
   // 場次標題 → {no,name,season,place}（啟發式；使用者可在校正頁修正）
-  const SCENE_NO_RE=/^(序場|序幕|序章|楔子|尾聲|終場|終幕|第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節]|(?:scene|act)\s*[0-9ivx]+)/i;
+  // 「開場」「結局」「序」這類單詞只在單獨成行、或後面接空白／冒號／括號（再接短標題）時才算標題——不吃「開場白」「序曲」「結局是…」
+  const SCENE_NO_RE=/^(序場|序幕|序章|楔子|尾聲|終場|終幕|(?:開場|開幕|閉幕|結局|序)(?![^\s　：:﹕『「（(【\[])|第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節]|(?:scene|act)\s*[0-9ivx]+)/i;
   const SEASON_RE=/^[『「（(【\[][^』」）)】\]]{1,6}[』」）)】\]]$/;
   function parseHeading(text){
     let t=String(text||'').replace(/^[=＝\-—\s　*#]+|[=＝\-—\s　*#]+$/g,'');
@@ -1933,7 +1934,10 @@ const TSP=(function(){
     const toks=t.split(/[\s　]+/).filter(k=>k && !/^[=＝\-—*#]+$/.test(k));   // 去掉裝飾用的 === 之類
     const rest=[];
     for(const k of toks){ if(!out.season && SEASON_RE.test(k)) out.season=k; else rest.push(k); }
-    if(rest.length){ out.name=rest[0]; out.place=rest.slice(1).join(' '); }
+    if(rest.length){
+      if(/^[0-9０-９]/.test(rest[0])) out.name=rest.join(' ');                   // 「第一場 1879 至 1882 年」：整段是場名（年份、時間），不是「場名＋地點」
+      else{ out.name=rest[0]; out.place=rest.slice(1).join(' '); }
+    }
     if(!m && !out.season && toks.length) { out.no=''; out.name=toks.join(' '); out.place=''; }
     return out;
   }
@@ -1956,6 +1960,7 @@ const TSP=(function(){
       if(t.length<=16 && END_MARK_RE.test(t.trim())){ put(L.n,'D'); pending=null; continue; }       // 「第二幕完」不是新的一幕
       if(SCENE_NO_RE.test(t.replace(/^[=＝\-—\s　*#]+/,'')) && t.length<=60){ put(L.n,'H'); pending=null; continue; }
       if(isPageNumberLine(t,false) || /^[-–—~]\s*[0-9０-９]{1,4}\s*[-–—~]$/.test(t)){ put(L.n,'N'); continue; }
+      if(fmMarker(t)){ put(L.n,'N'); pending=null; continue; }                  // 「角色表」「分場表」「編劇的話」：不是續行也不是指示
       const sp=(!sep || pfxMatch(t,sep,surf))?splitSpeakerPrefix(t,surf):null;
       if(sp){ put(L.n,'S',sp.ids.filter((x,i,ar)=>ar.indexOf(x)===i).join('/')); pending=null; continue; }
       if(/^(?:[（(].*[）)]|【.*】)$/.test(t)){ put(L.n,'D'); continue; }
@@ -2066,10 +2071,23 @@ const TSP=(function(){
       if(owners.length===1){ owners[0].aliases.push(t); surf2.set(t,owners[0].id); continue; }
       out.push({id, name:id, aliases:[], gender:'n'}); added.push(id);
     }
+    // 縮寫合說：「說／問：」「父／母：」是單字簡稱，單字是某個角色名稱的一部分（不能說／不要問、父親／母親）。
+    // 名稱以這個字開頭的角色恰好一個就是它；沒有的話，名稱含有這個字的角色恰好一個就是它；兩個以上就不猜（那幾行維持待校正）。
+    // 補成別名，後面的前綴覆寫、組回、校正頁全部看得懂這個寫法。
+    const comboCnt=new Map();
+    for(const l of lines){ const m=pfxMatch(l.text,sep); if(m && m.toks.length>1) for(const t of m.toks) comboCnt.set(t,(comboCnt.get(t)||0)+1); }
+    const abbrev=new Set();
+    for(const [t,c] of comboCnt){
+      if(c<2 || t.length>2 || surfGet(surf2,t)) continue;
+      const longer=r=>[r.id,r.name].concat(r.aliases||[]).filter(x=>x && x.length>t.length);
+      const starts=out.filter(r=>longer(r).some(x=>x.startsWith(t)));
+      const owners=starts.length?starts:out.filter(r=>longer(r).some(x=>x.includes(t)));
+      if(owners.length===1){ owners[0].aliases.push(t); surf2.set(t,owners[0].id); abbrev.add(t); }
+    }
     // 候選稱呼表（交給模型判斷哪些是角色）：模型第一段沒列出、但行首出現過的稱呼（依次數排序，最多 150 個），各附一行例句
     const ex=new Map(); for(const l of lines){ const m=pfxMatch(l.text,sep); if(m) for(const t of m.toks) if(!ex.has(t)) ex.set(t,l.text); }
-    const candidates=[...cnt].filter(([t,c])=>!surfGet(surf,t) && !NARR_RE.test(t) && t.length<=24 && !/[|｜]/.test(t) && (!CREDIT_SET.has(t) || c>=need(t))).sort((x,y)=>y[1]-x[1]).slice(0,150).map(([t,c])=>[t,c,(ex.get(t)||'').slice(0,80)]);
-    return {on:true, roles:out, prefixLines, added, sep, candidates};
+    const candidates=[...cnt].filter(([t,c])=>!surfGet(surf,t) && !NARR_RE.test(t) && t.length<=24 && !/[|｜]/.test(t) && (!CREDIT_SET.has(t) || c>=need(t)) && !abbrev.has(t)).sort((x,y)=>y[1]-x[1]).slice(0,150).map(([t,c])=>[t,c,(ex.get(t)||'').slice(0,80)]);
+    return {on:true, roles:out, prefixLines, added, sep, candidates, abbrev:[...abbrev]};
   }
   // 標記完成後套用：有已知前綴的行一律是台詞；沒有前綴卻被標成台詞的行改用規則標並標為待校正；
   // 夾著別人前綴的行標為待校正。labels 會被就地修改。
@@ -2322,9 +2340,8 @@ const TSP=(function(){
   const FM_CREDIT_RE=new RegExp('^(?:'+CREDIT_WORDS.join('|')+')(?:[\\s　]*[：:﹕][\\s　]*|[\\s　]+)\\S');
   const fmCredit=t=>{ t=String(t||'').trim(); return t.length<=60 && FM_CREDIT_RE.test(t) && !/[。！？!?]/.test(t); };
   const FM_SCENE_TOK=/第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節]/;
-  const FM_HEAD_WORD=/^(?:開場|開幕|序|序場|序幕|序章|楔子|尾聲|結局|終場|終幕|閉幕)(?:[\s　：:﹕].{0,30})?$/;
   // 像標題的行（含「不能說　第一場　我們打京城來」這種角色表與分場表並排時被併成一行的）
-  const fmHead=(t,L)=>{ t=String(t||'').trim(); return !!t && t.length<=40 && (L==='H' || FM_SCENE_TOK.test(t) || FM_HEAD_WORD.test(t) || SCENE_NO_RE.test(t)); };
+  const fmHead=(t,L)=>{ t=String(t||'').trim(); return !!t && t.length<=40 && (L==='H' || FM_SCENE_TOK.test(t) || SCENE_NO_RE.test(t)); };
   const fmBracket=t=>{ t=String(t||'').trim(); return t.length>=5 && /^[（(【\[].+[）)】\]]$/.test(t); };
   // 場次標題的比對用字串：從「第N場」起、去掉空白與冒號（「Christina：第一場 手繩，畢業證書」→「第一場手繩，畢業證書」）
   const fmKey=t=>{ t=String(t||'').trim(); const m=t.match(/第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節].*$/); return (m?m[0]:t).replace(/[\s　：:﹕]+/g,''); };
@@ -2718,7 +2735,7 @@ const TSP=(function(){
     const roles=finalRoles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
     return {roles, rules:fmt.rules, scenes:asm.scenes, labels, dirPairs,
       stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), partialChunkNos:partial.sort((a,b)=>a-b), partialLines, retried, lines:lines.length}, asm.stats,
-        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered, nonScript:ns, joinedBrackets:jb}), errors};
+        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep, abbrev:pm.abbrev}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered, nonScript:ns, joinedBrackets:jb}), errors};
   }
 
   return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,numberedEdgeDrops,shapeKey,itemsToLines,detectNameColumns,detectColumnLayout,pdfItemsToPages,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,trimCastTables,trimFrontMatter,dedupeSceneList,joinOpenBrackets,detectDirPairs,normPunct,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};

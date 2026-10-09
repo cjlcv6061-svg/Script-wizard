@@ -93,6 +93,21 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
   ok(bad.length <= 2, '場次標題解析（22 場）失敗 ' + bad.length + '：' + JSON.stringify(bad.slice(0, 3)));
   eq(T.parseHeading('=== 第三場　分類 ===　『夏』　大阪'), { no: '第三場', name: '分類', season: '『夏』', place: '大阪' }, '裝飾標題');
   eq(T.parseHeading('SCENE 2').no, 'SCENE2', '英文標題');
+  // 標題詞彙（第三組）：開場、開幕、閉幕、結局、序 單獨成行或後面接空白／冒號／括號才算
+  for (const [h, no, name] of [['開場', '開場', ''], ['開幕', '開幕', ''], ['閉幕', '閉幕', ''], ['序', '序', ''], ['結局 遠走高飛', '結局', '遠走高飛'], ['結局　重逢', '結局', '重逢']]) {
+    const p = T.parseHeading(h);
+    eq([p.no, p.name, p.place], [no, name, ''], '標題「' + h + '」');
+  }
+  eq(T.parseHeading('序　『秋』　一間茶餐廳'), { no: '序', name: '一間茶餐廳', season: '『秋』', place: '' }, '序＋季節＋場名');
+  for (const t of ['開場', '開幕', '閉幕', '序', '結局 遠走高飛', '序：緣起']) eq(T.heuristicLabels([{ n: 1, text: t }], roles, false).get(1).label, 'H', '啟發式：「' + t + '」是標題');
+  for (const t of ['開場白是這樣的，大家好。', '序曲響起，燈光漸亮。', '結局是他終於走了。', '開幕式很熱鬧', '序號 12 的觀眾請入場']) ok(T.heuristicLabels([{ n: 1, text: t }], roles, false).get(1).label !== 'H', '啟發式：「' + t + '」不是標題');
+  // 場名以數字開頭（年份、時間）：整段是場名，不拆成「場名＋地點」
+  eq(T.parseHeading('第一場 1879 至 1882 年'), { no: '第一場', name: '1879 至 1882 年', season: '', place: '' }, '年份區間整段當場名');
+  eq(T.parseHeading('第二場 2 號房 客廳').name, '2 號房 客廳', '數字開頭：整段');
+  eq(T.parseHeading('第二場　客廳　二樓'), { no: '第二場', name: '客廳', season: '', place: '二樓' }, '一般場名＋地點照舊');
+  // 前言標記行（角色表、分場表、編劇的話…）：啟發式後備標雜訊，不是續行也不是指示
+  for (const t of ['角色表', '分場表', '角色表 分場表', '角色表： 分場表', '編劇的話', '目錄', '編劇的話 這齣戲的靈感來自一個夏天的午後，']) eq(T.heuristicLabels([{ n: 1, text: '偉：他說到最後' }, { n: 2, text: t }], roles, false).get(2).label, 'N', '啟發式：「' + t + '」是雜訊');
+  eq(T.heuristicLabels([{ n: 1, text: '偉：他說到最後' }, { n: 2, text: '角色表演得很好' }], roles, false).get(2).label, 'C', '啟發式：「角色表演得很好」不是標記行');
 }
 
 
@@ -378,6 +393,35 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
       // 模型自己列的角色不受影響
       const pl = T.detectPrefix(mk(credits.concat(dlg)), rl.concat([{ id: '導演', name: '導演', aliases: [], gender: 'n' }]));
       ok(pl.roles.some(r => r.id === '導演'), '模型列出的「導演」留著');
+    }
+    // --- 縮寫合說（第三組）：「說／問：」「父／母：」的單字是角色名稱的一部分 ---
+    {
+      const rl = ['不能說', '不要問', '父親', '母親', '神父', '兒子', '孫子', '老闆娘', '老人甲', '老人乙'].map(id => ({ id, name: id, aliases: [], gender: 'n' }));
+      const body = [];
+      for (let i = 0; i < 12; i++) body.push('不能說：第' + i + '句。', '不要問：好。', '父親：爸爸說第' + i + '句。', '母親：媽媽說。', '神父：祝福你。', '兒子：好。', '孫子：嗯。', '老闆娘：來了。', '老人甲：哦。', '老人乙：呀。');
+      const combos = ['說／問：死！', '說／問：請！', '問／說：好可愛。', '父／母：可是那個時候我哪有錢？', '父／母：算了。', '子／父：好。', '子／母：嗯。', '老／父：喂。', '老／母：嗯。', '闆／父：喂。'];
+      const lines = mkl(combos.concat(body));
+      const pm = T.detectPrefix(lines, rl);
+      const alias = id => pm.roles.find(r => r.id === id).aliases.slice().sort();
+      eq([alias('不能說'), alias('不要問'), alias('父親'), alias('母親')], [['說'], ['問'], ['父'], ['母']], '單字簡稱補成別名：說→不能說、問→不要問、父→父親（名稱以它開頭的優先，不被「神父」搶走）、母→母親');
+      eq(pm.abbrev.slice().sort(), ['問', '母', '父', '說'], '回報補上的簡稱');
+      eq([alias('神父'), alias('兒子'), alias('孫子'), alias('老闆娘')], [[], [], [], []], '兩個以上角色都含有的字（子：兒子／孫子、老：老闆娘／老人甲／老人乙）不猜；只出現一次的字（闆：只有老闆娘含有，但全劇只寫過一次）也不補');
+      ok(!pm.candidates.some(c => ['說', '問', '父', '母'].includes(c[0])) && pm.candidates.some(c => c[0] === '子') && pm.candidates.some(c => c[0] === '老'), '已經對到角色的簡稱不再問模型；沒對到的照舊列為候選');
+      // 前綴覆寫：模型沒標的合說行，角色以別名對回 id
+      const labels = new Map(lines.map(l => [l.n, { label: 'D', role: '' }]));
+      T.applyPrefix(lines, labels, pm.roles, pm.sep);
+      const role = text => labels.get(lines.findIndex(l => l.text === text) + 1);
+      eq([role('說／問：死！'), role('問／說：好可愛。'), role('父／母：算了。')].map(v => [v.label, v.role]), [['S', '不能說/不要問'], ['S', '不要問/不能說'], ['S', '父親/母親']], '合說行：角色是各自的全名');
+      eq(role('子／父：好。').label, 'D', '含有不確定簡稱的合說行：維持原判（不硬猜）');
+      // 組回：前綴從台詞拿掉，角色是全名
+      const asm = T.assemble(lines, labels, pm.roles).scenes[0].lines;
+      eq(asm.find(l => l.s === '父親/母親' && l.t === '算了。'), { s: '父親/母親', t: '算了。' }, '組回後合說台詞：角色＝父親/母親，前綴不留在台詞裡');
+      // 簡稱本身就是角色（趙／華）、或每一個字都已經是別名：不動
+      const rl2 = [{ id: '趙', name: '趙', aliases: [], gender: 'n' }, { id: '華', name: '華', aliases: [], gender: 'n' }, { id: '趙先生', name: '趙先生', aliases: [], gender: 'n' }];
+      const l2 = mkl(['趙／華：好。', '趙／華：嗯。'].concat(Array.from({ length: 12 }, (_, i) => ['趙：第' + i + '句。', '華：好。']).flat()));
+      const pm2 = T.detectPrefix(l2, rl2);
+      eq(pm2.abbrev, [], '本來就是角色的稱呼不當簡稱');
+      eq(pm2.roles.find(r => r.id === '趙').aliases, [], '「趙」是角色，不會變成「趙先生」的別名');
     }
     // --- 幕尾標記：就在劇本旁邊、被標成雜訊或標題 → 指示；離劇本很遠的不動；啟發式不把它當標題 ---
     {

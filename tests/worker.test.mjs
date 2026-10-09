@@ -2,6 +2,7 @@
 // （供應商允許清單、data_collection、溫度 0）、輸出過濾、錯誤對應（503/502）、日誌不含劇本內容。
 import assert from 'node:assert';
 import worker, { Limiter, validatePayload } from '../worker/src/index.mjs';
+import { buildMessages } from '../worker/prompts.mjs';
 
 let n = 0;
 const ok = (c, m) => { assert(c, m); n++; };
@@ -274,6 +275,16 @@ const post = (env, body, headers = {}, raw) => worker.fetch(new Request('https:/
     const l = JSON.parse(logs[0]);
     ok(!logs[0].includes('極機密') && !logs[0].includes('203.0.113.77'), '日誌不含劇本內容與原始 IP');
     ok(l.ip.length === 16 && l.lines === 1 && l.status === 200 && l.mode === 'label' && l.t, '日誌只有時間、IP 雜湊、行數、狀態碼（與模式）');
+  }
+
+  // 提示詞（第三組）：角落括號、前言與清單標雜訊、單獨成行的開場／結局是標題。
+  // 這裡只確保文字在；模型實際照不照做要用 eval 的 live 模式驗證。
+  {
+    const sys = buildMessages({ mode: 'label', lines: [[1, 'x']], roles: [], rules: {} })[0].content;
+    ok(sys.includes('括號可能是（）、()、【】') && sys.includes('17\t【燈暗。】') && sys.includes('17|D|'), 'label：舞台指示的括號與範例有【】');
+    ok(/N  雜訊：[^\n]*作者簡介[^\n]*編劇的話[^\n]*角色表[^\n]*分場表/.test(sys), 'label：作者簡介、編劇的話、角色表、分場表是雜訊');
+    ok(/H  [^\n]*「開場」「序」「結局」單獨成行[^\n]*分場表裡列出的場次名稱[^\n]*標 N/.test(sys), 'label：開場、序、結局單獨成行也是標題；分場表裡列的場次名稱不是');
+    ok(buildMessages({ mode: 'format', lines: [[1, 'x']] })[0].content.includes('角落括號【】'), 'format：舞台指示範例有角落括號');
   }
 
   console.log = origLog;

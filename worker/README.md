@@ -35,6 +35,7 @@
    npx wrangler deploy
    npx wrangler secret put OPENROUTER_API_KEY    # 貼上 key；不經過聊天、不寫進任何檔案
    ```
+   - 改過 `worker/prompts.mjs`（提示詞）之後要再執行一次 `npx wrangler deploy`，線上的 Worker 才會用新的提示詞；`index.html` 裡的本機規則是前端的程式，重新發布 GitHub Pages 即可。
 5. 把部署後的網址（`https://tsj-parse.<子網域>.workers.dev`）填進 `index.html` 的 `TSJ_CONFIG.WORKER_URL`。
 6. 上線前依 OpenRouter 與所選供應商的官方條款確認資料保留與訓練政策，據此修訂同意畫面的隱私聲明。
 
