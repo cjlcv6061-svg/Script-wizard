@@ -1416,6 +1416,44 @@ const TSP=(function(){
     return pages.map(p=>p.map(fix));
   }
 
+  // 帶頁碼的頁眉頁尾：「12 陳麗芬 《廢胎》」「3 劇本創作比賽 得獎劇本集」「5 | Title」。
+  // 上面「同形狀的行出現在 ≥30% 頁面邊緣」的規則，對劇本合集不夠用：每份劇本各有自己的偶數頁頁眉，每種只出現約 10 次。
+  // 這裡改看數字：邊緣行（頁面頭尾各 edge 行）有一個獨立整數、位在行首或行尾，而且「整數 − 頁序」是常數
+  // （同形狀、同位置、跨 ≥3 頁），那個數字就是頁碼，整行是頁眉頁尾。頁碼從頭重編的文件，每一段各自成立。
+  // 場次標題（第N場）與台詞形狀的行不算；一頁剛好一場、場次號等於頁序的劇本也因此不會被誤刪。回傳要刪的 'pi:i' 集合。
+  const HDR_INT=/(?<![0-9０-９.\/])[0-9]{1,4}(?![0-9０-９\/])/g;
+  const HDR_SCENE=/^[\s　]*第\s*[0-9一二三四五六七八九十百零〇]+\s*[場幕景章回節]/;
+  function numberedEdgeDrops(pages, edge){
+    const groups=new Map();                                   // 位置＋形狀（那個整數換成 #）→ [{pi,i,k}]，k＝整數 − 頁序
+    pages.forEach((p,pi)=>{
+      const take=(i,pos)=>{
+        if(typeof p[i]!=='string') return;
+        const u=p[i].trim().replace(/^[\s\-–—~|｜·•*]+|[\s\-–—~|｜·•*]+$/g,'');
+        if(!u || HDR_SCENE.test(u) || DIALOGUE_LIKE.test(u) || /[：:]\S/.test(u)) return;
+        const toks=[...u.matchAll(HDR_INT)];
+        if(!toks.length || toks.length>2) return;
+        for(const m of toks){
+          if(m.index>0 && m.index+m[0].length<u.length) continue;                          // 數字要在行首或行尾（頁碼的位置）
+          const shape=pos+'|'+(u.slice(0,m.index)+'#'+u.slice(m.index+m[0].length)).replace(/\s+/g,'');
+          if(!groups.has(shape)) groups.set(shape,[]);
+          groups.get(shape).push({pi,i,k:+m[0]-(pi+1)});
+        }
+      };
+      for(let i=0;i<Math.min(edge,p.length);i++) take(i,'T');
+      for(let i=Math.max(edge,p.length-edge);i<p.length;i++) take(i,'B');
+    });
+    const drop=new Set();
+    for(const occ of groups.values()){
+      if(occ.length<3) continue;
+      const byK=new Map(); for(const o of occ){ if(!byK.has(o.k)) byK.set(o.k,[]); byK.get(o.k).push(o); }
+      const good=[...byK.values()].filter(g=>g.length>=3);
+      const n=good.reduce((a,g)=>a+g.length,0);
+      if(n/occ.length<0.8) continue;                                                      // 大多數出現都符合「頁碼＝頁序＋常數」才算
+      for(const g of good) for(const o of g) drop.add(o.pi+':'+o.i);
+    }
+    return drop;
+  }
+
   // 去 PDF 頁眉頁尾與頁碼。pages: string[][]（每頁的行）。
   // 回傳 {pages, removed:[{page,text,reason}]}；拿不準的留給後面的 LLM 標為雜訊。
   function cleanPdfPages(pages, opts){
@@ -1437,7 +1475,7 @@ const TSP=(function(){
       seen.forEach(k=>count.set(k,(count.get(k)||0)+1));
     });
     const need=Math.max(2,Math.ceil(np*0.3));
-    const cleaned=pages.map((p,pi)=>{
+    let cleaned=pages.map((p,pi)=>{
       const keep=[];
       p.forEach((line,i)=>{
         if(edgeIdx[pi].has(i)){
@@ -1450,6 +1488,12 @@ const TSP=(function(){
       });
       return keep;
     });
+    // 出現次數不夠多、但頁碼逐頁遞增的頁眉頁尾（劇本合集每份劇本各自的頁眉）
+    const nd=numberedEdgeDrops(cleaned, edge);
+    if(nd.size) cleaned=cleaned.map((p,pi)=>p.filter((line,i)=>{
+      if(nd.has(pi+':'+i)){ removed.push({page:pi+1,text:line,reason:'pageno-hdr'}); return false; }
+      return true;
+    }));
     // 內文中的連號頁碼
     const flat=[]; cleaned.forEach((p,pi)=>p.forEach((l,i)=>flat.push({pi,i,l})));
     const drop=sequentialPageNumberIdx(flat.map(x=>x.l));
@@ -2384,7 +2428,7 @@ const TSP=(function(){
         {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered, nonScript:ns, joinedBrackets:jb}), errors};
   }
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,detectNameColumns,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,trimCastTables,joinOpenBrackets,normPunct,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,numberedEdgeDrops,shapeKey,itemsToLines,detectNameColumns,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,trimCastTables,joinOpenBrackets,normPunct,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 
