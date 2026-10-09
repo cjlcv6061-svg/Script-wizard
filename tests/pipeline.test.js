@@ -191,6 +191,20 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     const mkl = arr => arr.map((t, i) => ({ n: i + 1, text: t }));
     const labelsOf = rows => new Map(rows.map((r, i) => [i + 1, { label: r[1], role: r[1] === 'S' ? (r[2] || r[0].split('：')[0]) : '' }]));
     const lab = (ls, labels, t) => labels.get(ls.findIndex(l => l.text === t) + 1).label;
+    // --- 「遠離劇本」門檻的實際效果（預設 60；eval/nonscript-sweep.mjs 有各門檻的掃描）---
+    // 兩段台詞之間的長內容（獨白的折行續行、長舞台指示）：要兩側都離台詞 ≥60 行才會被清，所以 118 行以內一行都不動；
+    // 劇本前後的前言／論述：緊鄰劇本的 59 行留著，其餘清掉
+    {
+      const dlg = k => { const rows = []; for (let i = 0; i < k; i++) rows.push(['甲：第' + i + '句。', 'S'], ['乙：好。', 'S']); return rows; };
+      const cut = (mid, label) => { const rows = dlg(30).concat(mid, dlg(30)), ls = mkl(rows.map(r => r[0])), lb = labelsOf(rows); T.trimNonScript(ls, lb); return rows.filter((r, i) => r[1] === label && lb.get(i + 1).label === 'N').length; };
+      const mono = m => [['甲：獨白開頭', 'S']].concat(Array.from({ length: m }, (_, i) => ['獨白續行' + i, 'C']));
+      const dirs = g => Array.from({ length: g }, (_, i) => ['（指示' + i + '）', 'D']);
+      eq([cut(mono(118), 'C'), cut(mono(119), 'C')], [0, 1], '獨白後接 118 行折行續行：一行不動；119 行：最中間的 1 行被清（門檻＝兩側各 60 行）');
+      eq([cut(dirs(118), 'D'), cut(dirs(119), 'D')], [0, 1], '長舞台指示塊也一樣');
+      const front = Array.from({ length: 300 }, (_, i) => ['這是前言第' + i + '行。', 'D']).concat(dlg(30)), fl = labelsOf(front);
+      T.trimNonScript(mkl(front.map(r => r[0])), fl);
+      eq(front.filter((r, i) => r[1] === 'D' && fl.get(i + 1).label === 'D').length, 59, '300 行前言：緊鄰劇本的 59 行殘留，其餘 241 行改雜訊');
+    }
     // --- 人物表：連續、每行不同角色、內容是簡介 → 雜訊；人物表之後緊接的真台詞、自我介紹的台詞不動 ---
     {
       const cast = [['阿珍：（阿燈的老婆）年紀約75歲', 'S'], ['阿燈：（阿珍的先生）約78歲，退休教師', 'S'], ['小美：阿燈的孫女，國中生，今年13歲', 'S'], ['阿宏：阿燈的兒子，40歲上班族', 'S'], ['肉圓阿伯：鄰居，性格急躁', 'S'], ['簡介折行的續行', 'C']];

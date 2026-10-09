@@ -2131,7 +2131,9 @@ const TSP=(function(){
     }
     return joined;
   }
-  function trimNonScript(lines, labels){
+  // farOverride：離最近台詞的行數門檻，預設 NONSCRIPT_FAR（只有 eval/nonscript-sweep.mjs 會傳別的值來量測）
+  function trimNonScript(lines, labels, farOverride){
+    const FAR=farOverride||NONSCRIPT_FAR;
     const lab=i=>labels.get(lines[i].n)||{label:'N'};
     const cast=trimCastTables(lines, labels);
     let nS=0, nQ=0;
@@ -2139,7 +2141,7 @@ const TSP=(function(){
     // 幕尾標記：標成雜訊或標題、而且就在劇本旁邊的，改成指示
     let ends=0;
     if(nS){
-      const near=new Array(lines.length).fill(false), R=NONSCRIPT_FAR;
+      const near=new Array(lines.length).fill(false), R=FAR;
       for(let i=0;i<lines.length;i++){ const L=lab(i).label; if(L==='S' || L==='Y') for(let k=Math.max(0,i-R+1);k<Math.min(lines.length,i+R);k++) near[k]=true; }
       for(let i=0;i<lines.length;i++){
         const L=lab(i).label;
@@ -2167,12 +2169,12 @@ const TSP=(function(){
     for(let i=0;i<N;i++){ const L=lab(i).label; if(L==='S' || L==='Y') last=i; dist[i]=i-last; }
     last=Infinity;
     for(let i=N-1;i>=0;i--){ const L=lab(i).label; if(L==='S' || L==='Y') last=i; dist[i]=Math.min(dist[i], last-i); }
-    let far=0;
+    let farCut=0;
     for(let i=0;i<N;i++){
       const L=lab(i).label;
-      if((L==='D' || L==='C' || L==='H') && dist[i]>=NONSCRIPT_FAR){ labels.set(lines[i].n,{label:'N',role:''}); far++; }
+      if((L==='D' || L==='C' || L==='H') && dist[i]>=FAR){ labels.set(lines[i].n,{label:'N',role:''}); farCut++; }
     }
-    return {quotes, far, cast, ends};
+    return {quotes, far:farCut, cast, ends};
   }
 
   function assemble(lines, labels, roles){
