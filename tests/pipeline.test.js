@@ -180,11 +180,99 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(r.quotes === 1 && r.far > 100, '回報：引文 1 行、遠離劇本 ' + r.far + ' 行');
     // 台詞很少（<50）：整份不動
     const few = mkl(['（說明）', '甲：好。', '（說明）']), fl = new Map([[1, { label: 'D', role: '' }], [2, { label: 'S', role: '甲' }], [3, { label: 'D', role: '' }]]);
-    eq(T.trimNonScript(few, fl), { quotes: 0, far: 0 }, '台詞少於 50 行：不動');
+    eq(T.trimNonScript(few, fl), { quotes: 0, far: 0, cast: 0, ends: 0 }, '台詞少於 50 行：不動');
     // 台詞行大多以引號起頭的劇本：不當引文
     const qr = []; for (let i = 0; i < 60; i++) qr.push(['甲：「第' + i + '句。」', 'S']); for (let i = 0; i < 80; i++) qr.push(['說明' + i, 'D']); qr.push(['乙：「孤立的一句。」', 'S']);
     const ql = mkl(qr.map(x => x[0])), qlab = new Map(qr.map((x, i) => [i + 1, { label: x[1], role: x[1] === 'S' ? x[0].split('：')[0] : '' }]));
     eq(T.trimNonScript(ql, qlab).quotes, 0, '台詞大多以引號起頭（≥10%）：不當引文');
+  }
+  // 人物表、幕尾標記、括號折行（論文式劇本 PDF 剩下的錯誤型態；通用規則）
+  {
+    const mkl = arr => arr.map((t, i) => ({ n: i + 1, text: t }));
+    const labelsOf = rows => new Map(rows.map((r, i) => [i + 1, { label: r[1], role: r[1] === 'S' ? (r[2] || r[0].split('：')[0]) : '' }]));
+    const lab = (ls, labels, t) => labels.get(ls.findIndex(l => l.text === t) + 1).label;
+    // --- 「遠離劇本」門檻的實際效果（預設 60；eval/nonscript-sweep.mjs 有各門檻的掃描）---
+    // 兩段台詞之間的長內容（獨白的折行續行、長舞台指示）：要兩側都離台詞 ≥60 行才會被清，所以 118 行以內一行都不動；
+    // 劇本前後的前言／論述：緊鄰劇本的 59 行留著，其餘清掉
+    {
+      const dlg = k => { const rows = []; for (let i = 0; i < k; i++) rows.push(['甲：第' + i + '句。', 'S'], ['乙：好。', 'S']); return rows; };
+      const cut = (mid, label) => { const rows = dlg(30).concat(mid, dlg(30)), ls = mkl(rows.map(r => r[0])), lb = labelsOf(rows); T.trimNonScript(ls, lb); return rows.filter((r, i) => r[1] === label && lb.get(i + 1).label === 'N').length; };
+      const mono = m => [['甲：獨白開頭', 'S']].concat(Array.from({ length: m }, (_, i) => ['獨白續行' + i, 'C']));
+      const dirs = g => Array.from({ length: g }, (_, i) => ['（指示' + i + '）', 'D']);
+      eq([cut(mono(118), 'C'), cut(mono(119), 'C')], [0, 1], '獨白後接 118 行折行續行：一行不動；119 行：最中間的 1 行被清（門檻＝兩側各 60 行）');
+      eq([cut(dirs(118), 'D'), cut(dirs(119), 'D')], [0, 1], '長舞台指示塊也一樣');
+      const front = Array.from({ length: 300 }, (_, i) => ['這是前言第' + i + '行。', 'D']).concat(dlg(30)), fl = labelsOf(front);
+      T.trimNonScript(mkl(front.map(r => r[0])), fl);
+      eq(front.filter((r, i) => r[1] === 'D' && fl.get(i + 1).label === 'D').length, 59, '300 行前言：緊鄰劇本的 59 行殘留，其餘 241 行改雜訊');
+    }
+    // --- 人物表：連續、每行不同角色、內容是簡介 → 雜訊；人物表之後緊接的真台詞、自我介紹的台詞不動 ---
+    {
+      const cast = [['阿珍：（阿燈的老婆）年紀約75歲', 'S'], ['阿燈：（阿珍的先生）約78歲，退休教師', 'S'], ['小美：阿燈的孫女，國中生，今年13歲', 'S'], ['阿宏：阿燈的兒子，40歲上班族', 'S'], ['肉圓阿伯：鄰居，性格急躁', 'S'], ['簡介折行的續行', 'C']];
+      const dlg = []; for (let i = 0; i < 30; i++) dlg.push(['阿珍：第' + i + '句。', 'S'], ['阿燈：好啊。', 'S']);
+      const rows = [['人物表', 'H']].concat(cast, [['第一場', 'H'], ['阿宏：我今年40歲了，還沒結婚！', 'S'], ['小美：我是他的女兒嗎？', 'S']], dlg);
+      const ls = mkl(rows.map(r => r[0])), labels = labelsOf(rows);
+      const r = T.trimNonScript(ls, labels);
+      eq(r.cast, 6, '人物表 5 行＋簡介折行的續行 1 行改雜訊');
+      ok(cast.every(c => lab(ls, labels, c[0]) === 'N'), '人物表每一行都是雜訊');
+      eq(lab(ls, labels, '阿宏：我今年40歲了，還沒結婚！'), 'S', '人物表後面緊接的台詞（有「我」、有驚嘆號）不動');
+      eq(lab(ls, labels, '阿珍：第0句。'), 'S', '一般台詞不動');
+      // 只有 3 行（<4）不算人物表；同一個角色重複出現會中斷
+      const few = [['阿珍：（阿燈的老婆）年紀約75歲', 'S'], ['阿燈：（阿珍的先生）約78歲', 'S'], ['小美：阿燈的孫女，13歲', 'S']].concat(dlg);
+      const fls = mkl(few.map(r => r[0])), fl = labelsOf(few);
+      eq(T.trimNonScript(fls, fl).cast, 0, '只有 3 行簡介：不當人物表');
+      const dup = [['阿珍：（阿燈的老婆）年紀約75歲', 'S'], ['阿珍：（阿燈的先生）約78歲', 'S'], ['阿珍：阿燈的孫女，13歲', 'S'], ['阿珍：阿燈的兒子，40歲', 'S'], ['阿珍：鄰居，性格急躁', 'S']].concat(dlg);
+      eq(T.trimNonScript(mkl(dup.map(r => r[0])), labelsOf(dup)).cast, 0, '同一個角色一直說話（不是一人一行的人物表）：不動');
+      // 人物表在台詞很少（<50 行）的劇本也要處理
+      const tiny = cast.concat([['阿珍：好。', 'S'], ['阿燈：好。', 'S']]);
+      const tl = labelsOf(tiny), tr = T.trimNonScript(mkl(tiny.map(r => r[0])), tl);
+      eq([tr.cast, tr.far], [6, 0], '台詞少於 50 行的劇本，人物表照樣處理，其餘不動');
+      // 自我介紹的場景：每人說自己的年齡，但有「我」→ 不是人物表
+      const intro = [['甲：我叫小明，今年10歲。', 'S'], ['乙：我是小華，今年11歲。', 'S'], ['丙：我是小玲，今年12歲。', 'S'], ['丁：我是小傑，今年13歲。', 'S'], ['戊：我是小莉，今年9歲。', 'S']].concat(dlg);
+      eq(T.trimNonScript(mkl(intro.map(r => r[0])), labelsOf(intro)).cast, 0, '自我介紹的台詞（有「我」）不是人物表');
+    }
+    // --- 幕尾標記：就在劇本旁邊、被標成雜訊或標題 → 指示；離劇本很遠的不動；啟發式不把它當標題 ---
+    {
+      const rows = [['第一場', 'H']];
+      for (let i = 0; i < 30; i++) rows.push(['甲：第' + i + '句。', 'S'], ['乙：好。', 'S']);
+      rows.push(['第二幕完', 'N'], ['全劇完', 'H'], ['（燈暗）', 'D']);
+      for (let i = 0; i < 80; i++) rows.push(['這是後記第' + i + '行。', 'D']);
+      rows.push(['劇終', 'N']);
+      const ls = mkl(rows.map(r => r[0])), labels = labelsOf(rows);
+      const r = T.trimNonScript(ls, labels);
+      eq(lab(ls, labels, '第二幕完'), 'D', '緊接台詞的「第二幕完」雜訊 → 指示');
+      eq(lab(ls, labels, '全劇完'), 'D', '標成標題的「全劇完」→ 指示（不會切出叫「完」的場次）');
+      eq(lab(ls, labels, '劇終'), 'N', '離劇本很遠（後記之後）的「劇終」不動');
+      eq(r.ends, 2, '回報 2 行');
+      // 啟發式（模型整塊失敗時的後備）：緊接在一句沒收尾的台詞後面，幕尾標記是指示；一般的折行文字仍是續行
+      const heur = t => T.heuristicLabels([{ n: 1, text: '偉：他說到最後' }, { n: 2, text: t }], roles, false).get(2).label;
+      for (const t of ['第二幕完', '全劇完', '（全劇完）', '劇終', '— 完 —', 'THE END', 'The End.', '本場終', '第 3 場 完']) eq(heur(t), 'D', '啟發式：「' + t + '」是指示，不是標題也不是續行');
+      for (const t of ['end.', '完美的一天', '終於來了', 'The Ending of it all']) eq(heur(t), 'C', '啟發式：「' + t + '」不是幕尾標記，仍是續行');
+      eq(heur('第二幕'), 'H', '啟發式：「第二幕」仍是標題');
+      eq(T.heuristicLabels([{ n: 1, text: '第二幕　求神' }], roles, false).get(1).label, 'H', '真的場次標題仍然是 H');
+    }
+    // --- 括號折行：台詞裡的（指示）寫到一半換行，後面那行（被標成指示）改成續行 ---
+    {
+      const rows = [['偉：（低頭看著地上的', 'S', '偉'], ['碎片，輕聲地）我不要', 'D'], ['朗：好吧。', 'S', '朗'], ['（燈暗）', 'D'], ['偉：（一邊說一邊', 'S', '偉'], ['走向門口，', 'D'], ['再回頭看了一眼）再見', 'D'], ['（停頓）', 'D']];
+      const ls = mkl(rows.map(r => r[0])), labels = labelsOf(rows);
+      const n = T.joinOpenBrackets(ls, labels, null, roles);
+      eq(n, 3, '被改成續行的指示行數');
+      eq(rows.map((r, i) => labels.get(i + 1).label), ['S', 'C', 'S', 'D', 'S', 'C', 'C', 'D'], '括號沒關的台詞後面接著的指示行改成續行，關上之後恢復；平常的指示不動');
+      const asm = T.assemble(ls, labels, roles).scenes[0].lines;
+      eq(asm[0], { s: '偉', t: '我不要', r: '偉：（低頭看著地上的碎片，輕聲地）我不要'.replace('偉：', '') }, '組回後折行的指示從台詞拿掉，原文保留在 r');
+      // 表情符號 ":(" 不算開括號；行尾單獨的「(」不算
+      const emo = [['偉：我好難過 :(', 'S', '偉'], ['（轉身離開）', 'D'], ['朗：真的嗎 (', 'S', '朗'], ['（燈暗）', 'D']];
+      const el = labelsOf(emo);
+      eq(T.joinOpenBrackets(mkl(emo.map(r => r[0])), el, null, roles), 0, '":(" 與行尾單獨的 "(" 不當成沒關的括號');
+      // 括號一直沒關上（多半是打錯）不動；往後看 6 行內關上才接
+      const typo = [['偉：（打錯了', 'S', '偉']].concat(Array.from({ length: 10 }, (_, i) => ['指示' + i, 'D']));
+      eq(T.joinOpenBrackets(mkl(typo.map(r => r[0])), labelsOf(typo), null, roles), 0, '括號一直沒關上：一行都不接');
+      const d6 = [['偉：（開始', 'S', '偉'], ['二', 'D'], ['三', 'D'], ['四', 'D'], ['五', 'D'], ['六', 'D'], ['七）', 'D'], ['（燈暗）', 'D']], d7 = d6.slice(0, 6).concat([['七', 'D'], ['八）', 'D']]);
+      eq(T.joinOpenBrackets(mkl(d6.map(r => r[0])), labelsOf(d6), null, roles), 6, '第 6 行指示關上括號：接 6 行，後面獨立的指示不動');
+      eq(T.joinOpenBrackets(mkl(d7.map(r => r[0])), labelsOf(d7), null, roles), 0, '第 7 行指示才關上：超過 6 行，不接');
+      // 中間出現別人的台詞：不接
+      const cut = [['偉：（低頭', 'S', '偉'], ['朗：什麼？', 'S', '朗'], ['看著地上）好', 'D']];
+      eq(T.joinOpenBrackets(mkl(cut.map(r => r[0])), labelsOf(cut), null, roles), 0, '括號沒關就換了說話者：不接');
+    }
   }
   // 縮寫合說：「老人甲/乙：」＝老人甲＋老人乙（後面的稱呼借用第一個稱呼的開頭）
   {
@@ -594,6 +682,45 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     calls = 0; threw = null;
     try { await T.runPipeline({ lines, callApi: async () => { calls++; throw Object.assign(new Error('quota'), { fatal: true, status: 429 }); }, concurrency: 1, retryDelays: [0, 0, 0] }); } catch (e) { threw = e; }
     ok(threw && threw.status === 429 && calls === 1, '本站每日上限（非 retryable）：不重試，立即中止');
+  }
+
+  // 論文式劇本（合成）：前言論述 → 人物表 → 劇本 → 幕尾標記 → 論述收尾。
+  // 模型把論述標成指示／續行、把人物表標成台詞、把「第二幕完」標成雜訊、把括號折行的後半標成指示。
+  {
+    const rows = [];       // [文字, 標準答案標籤, 標準答案角色, 模型給的標籤, 模型給的角色]
+    for (let i = 0; i < 80; i++) rows.push(['這是論文前言第' + i + '行，討論創作理念與形式。', 'N', '', i % 3 ? 'D' : 'C', '']);
+    const cast = ['阿珍：（阿燈的老婆）年紀約75歲', '阿燈：（阿珍的先生）約78歲，退休教師', '小美：阿燈的孫女，國中生，今年13歲', '阿宏：阿燈的兒子，40歲上班族', '肉圓阿伯：鄰居，性格急躁'];
+    for (const c of cast) rows.push([c, 'N', '', 'S', c.split('：')[0] === '肉圓阿伯' ? '阿宏' : c.split('：')[0]]);
+    rows.push(['第一場', 'H', '', 'H', '']);
+    const who = ['阿珍', '阿燈', '小美', '阿宏'];
+    for (let i = 0; i < 40; i++) rows.push([who[i % 4] + '：第' + i + '句台詞內容。', 'S', who[i % 4], 'S', who[i % 4]]);
+    rows.push(['阿燈：（低頭看著地上的', 'S', '阿燈', 'S', '阿燈'], ['碎片，輕聲地）我不要這樣。', 'C', '', 'D', '']);
+    for (let i = 40; i < 60; i++) rows.push([who[i % 4] + '：第' + i + '句台詞內容。', 'S', who[i % 4], 'S', who[i % 4]]);
+    rows.push(['第二幕完', 'D', '', 'N', '']);
+    for (let i = 0; i < 90; i++) rows.push(['這是論文收尾第' + i + '行，總結全文的論點。', 'N', '', i % 2 ? 'D' : 'C', '']);
+    const lines = T.buildLines({ text: rows.map(r => r[0]).join('\n') }).lines;
+    eq(lines.length, rows.length, '合成論文式劇本逐行對應');
+    const model = async p => {
+      if (p.mode === 'format') return JSON.stringify({ roles: who.map(w => ({ id: w, name: w })), rules: { speaker_pos: 'prefix' } });
+      if (p.mode === 'roles') return '';
+      return p.lines.map(([n]) => { const r = rows[n - 1]; return n + '|' + r[3] + '|' + r[4]; }).join('\n');
+    };
+    const r = await T.runPipeline({ lines, callApi: model, concurrency: 1, retryDelays: [0, 0, 0] });
+    const at = t => r.labels.get(lines.find(l => l.text === t).n).label;
+    ok(cast.every(c => at(c) === 'N'), '人物表（含只出現一次的肉圓阿伯）：不是台詞');
+    eq(at('第二幕完'), 'D', '「第二幕完」是指示，不是雜訊');
+    eq(at('碎片，輕聲地）我不要這樣。'), 'C', '括號折行的後半是續行');
+    const bad = lines.filter((l, i) => { const g = rows[i], p = r.labels.get(l.n); return g[1] === 'S' ? !(p.label === 'S' && p.role === g[2]) : p.label !== g[1]; });
+    // 論述裡離台詞 <60 行的指示／續行不動（這是遠離劇本規則的邊界，見 SPEC 與 eval/README 的掃描）；≥60 行的全部改雜訊。其餘每一行都對
+    const anchors = rows.map((x, i) => x[1] === 'S' ? i : -1).filter(i => i >= 0);
+    const dist = i => Math.min(...anchors.map(a => Math.abs(a - i)));
+    const expectBad = rows.map((x, i) => i).filter(i => rows[i][1] === 'N' && rows[i][3] !== 'N' && rows[i][3] !== 'S' && dist(i) < 60);
+    eq(bad.map(l => l.n - 1), expectBad, '錯誤的行恰好是「離台詞 <60 行的論述」（' + expectBad.length + ' 行）：人物表、劇本、幕尾標記一行都沒錯');
+    eq(r.roles.map(x => x.id), who, '角色清單只有四個說話的角色（沒有只出現在人物表的肉圓阿伯）');
+    eq([r.stats.nonScript.cast, r.stats.joinedBrackets], [5, 1], '統計：人物表 5 行、括號折行 1 行');
+    const sl = r.scenes.flatMap(s => s.lines), lastBrace = sl.find(l => l.r && /低頭看著地上的碎片/.test(l.r));
+    ok(lastBrace && lastBrace.t === '我不要這樣。' && lastBrace.s === '阿燈', '組回：折行的指示從台詞拿掉、留在 r：' + JSON.stringify(lastBrace));
+    ok(sl.filter(l => l.s !== undefined).length === 61, '台詞 61 句（人物表的 5 行沒有混進來）：' + sl.filter(l => l.s !== undefined).length);
   }
 
   // 候選稱呼分類（真實 docx 暴露的問題）：次要角色（護士）、簡稱（楊＝楊淑華）、不是角色的標記（SD Cue）。

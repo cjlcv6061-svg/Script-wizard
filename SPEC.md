@@ -163,6 +163,7 @@ Cloudflare Worker（獨立部署）
   - 溫度 0。提示詞要求只輸出指定格式、不輸出任何劇本原文。
   - 若 `PROVIDERS` 內所有供應商都失敗，回 503，前端顯示「服務暫時無法使用」，不得退而路由到清單外供應商。
   - 換模型或換供應商只改環境變數，不改程式碼。
+  - **現況**：實際部署用 `anthropic/claude-haiku-5.5`、`PROVIDERS=anthropic`、每 IP 每日 100（見 `worker/wrangler.toml`）；選擇的依據是 PR #1 的真實檔案實測（小模型待校正行太多，見 `eval/README.md`）。上面的 DeepSeek／together／fireworks 是原始規劃。
 - **隱私**：不記錄 body；日誌只留時間、IP 雜湊、行數、狀態碼。
 - **快取**：只做用戶端快取，以劇本內容 SHA-256 為鍵存 IndexedDB，相同內容不重複呼叫。Worker 端不存劇本。
 - 全站每日總請求上限（初值 600，可調）：到頂回 429，保護站長的花費。

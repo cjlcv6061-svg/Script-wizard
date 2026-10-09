@@ -26,8 +26,9 @@
 2. **OpenRouter**：註冊、充值 10 美元、建立 API key、在後台設定金額上限；在帳號隱私設定關閉「允許記錄提示詞與回覆」。
 3. 編輯 `wrangler.toml`：
    - `ALLOWED_ORIGIN` → 已預設為 `https://cjlcv6061-svg.github.io`（由這個 repo 推得；改帳號或自訂網域時才要改）
-   - `MODEL` → 到 OpenRouter 模型頁確認 DeepSeek V4.1 Flash 的**現行模型 ID**（程式不寫死；沒改時 Worker 回 503 `not_configured`）
-   - `PROVIDERS` → 到該模型頁的 Providers 分頁，確認清單內供應商標示為不訓練、不保留提示詞；更換清單時須重新確認
+   - `MODEL` → 目前是 `anthropic/claude-haiku-5.5`（上線前到 OpenRouter 模型頁確認現行 ID；沒設時 Worker 回 503 `not_configured`）
+   - `PROVIDERS` → 目前是 `anthropic`。到該模型頁的 Providers 分頁，確認清單內供應商標示為不訓練、不保留提示詞；更換清單時須重新確認
+   - `DAILY_PER_IP` → `wrangler.toml` 設 100（程式內建預設 60）；`DAILY_TOTAL` → 600
 4. 部署：
    ```sh
    cd worker && npm install

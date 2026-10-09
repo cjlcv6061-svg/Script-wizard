@@ -1765,6 +1765,7 @@ const TSP=(function(){
     const put=(n,label,role)=>{ const v={label,role:role||''}; if(flag) v.rv=true; map.set(n,v); prev=label; };
     for(const L of lines){
       const t=L.text; const _pt=prevText; prevText=t;
+      if(t.length<=16 && END_MARK_RE.test(t.trim())){ put(L.n,'D'); pending=null; continue; }       // 「第二幕完」不是新的一幕
       if(SCENE_NO_RE.test(t.replace(/^[=＝\-—\s　*#]+/,'')) && t.length<=60){ put(L.n,'H'); pending=null; continue; }
       if(isPageNumberLine(t,false) || /^[-–—~]\s*[0-9０-９]{1,4}\s*[-–—~]$/.test(t)){ put(L.n,'N'); continue; }
       const sp=(!sep || pfxMatch(t,sep,surf))?splitSpeakerPrefix(t,surf):null;
@@ -2074,11 +2075,88 @@ const TSP=(function(){
   //  ②遠離劇本：指示／續行／標題行，前後 FAR 行內都沒有任何台詞或歌詞 → 不是劇本裡的舞台指示，改雜訊
   //    （舞台指示一定夾在台詞之間；劇本前言、大綱、論述離最近的台詞很遠）。
   const NONSCRIPT_FAR=60;
-  function trimNonScript(lines, labels){
+  // 人物表：「阿珍：（阿燈的老婆）年紀約75歲」。前綴格式下它和台詞長得一模一樣，會被當成台詞，
+  // 也讓前言、論述因為「離台詞很近」而不被清掉。特徵：連續好幾行、每行一個不同的角色、內容是描述
+  // （年齡、身分、與別人的關係）而不是台詞——沒有「我」、沒有驚嘆號或問號。
+  const CAST_DESC_RE=/[0-9０-９一二三四五六七八九十]{1,3}\s*(?:多|來|出頭)?歲|年約|年紀|歲數|(?:的|是)(?:老婆|太太|妻子|丈夫|先生|兒子|女兒|媽媽|母親|爸爸|父親|哥哥|姐姐|弟弟|妹妹|朋友|同學|同事|鄰居|老闆|老師|員工|學生|主人|僕人|房東|孫子|孫女|外甥|姪|女友|男友)|性格|職業|身[分份]|飾演|扮演|演員|\b(?:aged?|years? old)\b/i;
+  const isCastBody=t=>CAST_DESC_RE.test(t) && !/[我咱俺]|[!?！？]/.test(t);
+  function trimCastTables(lines, labels){
     const lab=i=>labels.get(lines[i].n)||{label:'N'};
+    const idx=[]; for(let i=0;i<lines.length;i++) if(lab(i).label==='S') idx.push(i);
+    // 說話者以行首寫的名字為準（模型對清單外的名字給的角色不可靠）
+    const who=i=>{ const m=pfxMatch(lines[i].text,null); return m?m.toks.join('/'):lab(i).role; };
+    let cast=0;
+    for(let a=0;a<idx.length;){
+      // 從 idx[a] 起盡量延伸：相鄰兩句台詞之間 ≤3 行、說話者互不相同
+      let b=a; const seen=new Set([who(idx[a])]);
+      while(b+1<idx.length && idx[b+1]-idx[b]<=4 && !seen.has(who(idx[b+1]))){ b++; seen.add(who(idx[b])); }
+      const run=idx.slice(a,b+1), cl=run.map(i=>isCastBody(lines[i].text));
+      const f=cl.indexOf(true), l=cl.lastIndexOf(true);
+      const like=f<0?0:cl.slice(f,l+1).filter(Boolean).length;
+      if(like>=4 && like>=(l-f+1)*0.7){
+        // 只動「第一個到最後一個像簡介」之間的行（人物表之後緊接的真台詞不動），連同簡介折行的續行
+        const end=run[l];
+        for(let k=run[f];k<=end;k++){ const L=lab(k).label; if(L==='S' || L==='C'){ labels.set(lines[k].n,{label:'N',role:''}); cast++; } }
+        for(let k=end+1;k<lines.length && lab(k).label==='C';k++){ labels.set(lines[k].n,{label:'N',role:''}); cast++; }
+        a=b+1;
+      }else a++;
+    }
+    return cast;
+  }
+  // 幕／場結束標記（「第二幕完」「全劇完」「劇終」「THE END」）：不是場次標題（不要切出一個叫「完」的場次），
+  // 也不是雜訊（它標出一幕的結束，留在劇本裡當指示）
+  const END_MARK_RE=/^[\s　*＊=＝\-–—~（(【\[「『]*(?:(?:全劇|全場|本劇|本場|本幕|第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節])\s*)?(?:完結|結束|劇終|終場|落幕|完|終|END|THE END|The End|FIN)[\s　*＊=＝\-–—~）)】\]」』。.!！]*$/;
+  // 括號折行：一句台詞裡的（指示）寫到一半換行，後面那行（常被標成舞台指示）其實還是同一句台詞。
+  // 前一行（台詞或續行）有沒關起來的括號，而且往後看 6 行內括號真的關上了 → 這幾行指示改成續行。
+  // （括號一直沒關上的多半是打錯，不動，免得吞掉後面不相干的指示。）
+  // 開括號後面要緊接著字才算（「:(」這類表情符號、行尾單獨的「(」不算）
+  const carryBracket=(d,t)=>{
+    for(let i=0;i<t.length;i++){
+      const ch=t[i];
+      if(ch==='（' || ch==='('){ if(i+1<t.length && !/\s/.test(t[i+1]) && !(i>0 && /[:;=]/.test(t[i-1]))) d++; }
+      else if((ch==='）' || ch===')') && d>0) d--;
+    }
+    return d;
+  };
+  function joinOpenBrackets(lines, labels, sep, roles){
+    const surf=buildSurfaceMap(roles||[]), lab=k=>(labels.get(lines[k].n)||{label:'N'}).label;
+    let depth=0, joined=0;
+    for(let i=0;i<lines.length;i++){
+      const L=lab(i);
+      if(L==='S') depth=carryBracket(0,lines[i].text);
+      else if(L==='C') depth=carryBracket(depth,lines[i].text);
+      else if(L==='D' && depth>0){
+        let d=depth, end=-1;
+        for(let k=i;k<lines.length && k<i+6;k++){
+          const w=lab(k);
+          if((w!=='D' && w!=='C' && w!=='N') || (w==='D' && pfxMatch(lines[k].text,sep,surf))) break;
+          d=carryBracket(d,lines[k].text);
+          if(!d){ end=k; break; }
+        }
+        if(end>=0){ for(let k=i;k<=end;k++) if(lab(k)==='D'){ labels.set(lines[k].n,{label:'C',role:''}); joined++; } i=end; }
+        depth=0;
+      }else if(L!=='N') depth=0;
+    }
+    return joined;
+  }
+  // farOverride：離最近台詞的行數門檻，預設 NONSCRIPT_FAR（只有 eval/nonscript-sweep.mjs 會傳別的值來量測）
+  function trimNonScript(lines, labels, farOverride){
+    const FAR=farOverride||NONSCRIPT_FAR;
+    const lab=i=>labels.get(lines[i].n)||{label:'N'};
+    const cast=trimCastTables(lines, labels);
     let nS=0, nQ=0;
     for(let i=0;i<lines.length;i++){ const L=lab(i); if(L.label==='S' || L.label==='Y') nS++; }
-    if(nS<50) return {quotes:0, far:0};
+    // 幕尾標記：標成雜訊或標題、而且就在劇本旁邊的，改成指示
+    let ends=0;
+    if(nS){
+      const near=new Array(lines.length).fill(false), R=FAR;
+      for(let i=0;i<lines.length;i++){ const L=lab(i).label; if(L==='S' || L==='Y') for(let k=Math.max(0,i-R+1);k<Math.min(lines.length,i+R);k++) near[k]=true; }
+      for(let i=0;i<lines.length;i++){
+        const L=lab(i).label;
+        if((L==='N' || L==='H') && near[i] && lines[i].text.length<=16 && END_MARK_RE.test(lines[i].text.trim())){ labels.set(lines[i].n,{label:'D',role:''}); ends++; }
+      }
+    }
+    if(nS<50) return {quotes:0, far:0, cast, ends};
     const QUOTE_RE=/^[^：:]{1,16}[：:]\s*[「『“"]/;
     let spoken=0; for(let i=0;i<lines.length;i++) if(lab(i).label==='S') spoken++;
     for(let i=0;i<lines.length;i++) if(lab(i).label==='S' && QUOTE_RE.test(lines[i].text)) nQ++;
@@ -2099,12 +2177,12 @@ const TSP=(function(){
     for(let i=0;i<N;i++){ const L=lab(i).label; if(L==='S' || L==='Y') last=i; dist[i]=i-last; }
     last=Infinity;
     for(let i=N-1;i>=0;i--){ const L=lab(i).label; if(L==='S' || L==='Y') last=i; dist[i]=Math.min(dist[i], last-i); }
-    let far=0;
+    let farCut=0;
     for(let i=0;i<N;i++){
       const L=lab(i).label;
-      if((L==='D' || L==='C' || L==='H') && dist[i]>=NONSCRIPT_FAR){ labels.set(lines[i].n,{label:'N',role:''}); far++; }
+      if((L==='D' || L==='C' || L==='H') && dist[i]>=FAR){ labels.set(lines[i].n,{label:'N',role:''}); farCut++; }
     }
-    return {quotes, far};
+    return {quotes, far:farCut, cast, ends};
   }
 
   function assemble(lines, labels, roles){
@@ -2291,17 +2369,18 @@ const TSP=(function(){
       pfx=applyPrefix(lines, labels, fmt.roles, pm.sep);
       const t=tidyRoles(lines, labels, fmt.roles, pm.sep); finalRoles=t.roles; pfx.dropped=t.dropped; pfx.renamed=t.renamed;
     }
+    const jb=joinOpenBrackets(lines, labels, pm.on?pm.sep:null, finalRoles);
     const sg=detectSongs(lines, labels, finalRoles, pm.on?pm.sep:null);
     const ns=trimNonScript(lines, labels);
-    if(pm.on && ns.quotes){ const t2=tidyRoles(lines, labels, finalRoles, pm.sep); finalRoles=t2.roles; }       // 引文改雜訊後，沒有台詞的角色不留
+    if(pm.on && (ns.quotes || ns.cast)){ const t2=tidyRoles(lines, labels, finalRoles, pm.sep); finalRoles=t2.roles; }       // 引文、人物表改雜訊後，沒有台詞的角色不留
     const asm=assemble(lines, labels, finalRoles);
     const roles=finalRoles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
     return {roles, rules:fmt.rules, scenes:asm.scenes, labels,
       stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), partialChunkNos:partial.sort((a,b)=>a-b), partialLines, retried, lines:lines.length}, asm.stats,
-        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered, nonScript:ns}), errors};
+        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered, nonScript:ns, joinedBrackets:jb}), errors};
   }
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,detectNameColumns,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,detectNameColumns,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,trimCastTables,joinOpenBrackets,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 
