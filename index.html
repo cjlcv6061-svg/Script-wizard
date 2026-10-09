@@ -2067,6 +2067,46 @@ const TSP=(function(){
     return {songs:out, covered};
   }
 
+  // ---------- 劇本以外的內容：論述裡引用的片段、離劇本很遠的說明文字 ----------
+  // 劇本只是整份文件的一部分（論文、附說明的劇本）時，模型常把論述文字標成舞台指示、把引用的劇本片段標成台詞。
+  // 規則只在劇本明確存在（台詞＋歌詞 ≥50 行）時才跑：
+  //  ①引文：台詞行冒號後接引號（「阿燈:「阿珍，你知道…」」），而全劇台詞行裡這樣開頭的不到 10% → 是論述在引用，改雜訊。
+  //  ②遠離劇本：指示／續行／標題行，前後 FAR 行內都沒有任何台詞或歌詞 → 不是劇本裡的舞台指示，改雜訊
+  //    （舞台指示一定夾在台詞之間；劇本前言、大綱、論述離最近的台詞很遠）。
+  const NONSCRIPT_FAR=60;
+  function trimNonScript(lines, labels){
+    const lab=i=>labels.get(lines[i].n)||{label:'N'};
+    let nS=0, nQ=0;
+    for(let i=0;i<lines.length;i++){ const L=lab(i); if(L.label==='S' || L.label==='Y') nS++; }
+    if(nS<50) return {quotes:0, far:0};
+    const QUOTE_RE=/^[^：:]{1,16}[：:]\s*[「『“"]/;
+    let spoken=0; for(let i=0;i<lines.length;i++) if(lab(i).label==='S') spoken++;
+    for(let i=0;i<lines.length;i++) if(lab(i).label==='S' && QUOTE_RE.test(lines[i].text)) nQ++;
+    let quotes=0;
+    // 台詞行偶爾以引號起頭（角色在轉述）不算：前後 4 行內夾著一般台詞（不以引號起頭）的留著，只改孤立的引文
+    const plainS=i=>lab(i).label==='S' && !QUOTE_RE.test(lines[i].text);
+    if(spoken && nQ/spoken<0.1){
+      const cut=[];
+      for(let i=0;i<lines.length;i++){
+        if(lab(i).label!=='S' || !QUOTE_RE.test(lines[i].text)) continue;
+        let near=false; for(let k=Math.max(0,i-4);k<=Math.min(lines.length-1,i+4) && !near;k++) if(k!==i && plainS(k)) near=true;
+        if(!near) cut.push(i);
+      }
+      for(const i of cut){ labels.set(lines[i].n,{label:'N',role:''}); quotes++; }
+    }
+    const N=lines.length, dist=new Array(N).fill(Infinity);
+    let last=-Infinity;
+    for(let i=0;i<N;i++){ const L=lab(i).label; if(L==='S' || L==='Y') last=i; dist[i]=i-last; }
+    last=Infinity;
+    for(let i=N-1;i>=0;i--){ const L=lab(i).label; if(L==='S' || L==='Y') last=i; dist[i]=Math.min(dist[i], last-i); }
+    let far=0;
+    for(let i=0;i<N;i++){
+      const L=lab(i).label;
+      if((L==='D' || L==='C' || L==='H') && dist[i]>=NONSCRIPT_FAR){ labels.set(lines[i].n,{label:'N',role:''}); far++; }
+    }
+    return {quotes, far};
+  }
+
   function assemble(lines, labels, roles){
     const surf=buildSurfaceMap(roles), roleIds=roles.map(r=>r.id);
     const scenes=[], stats={S:0,C:0,D:0,H:0,N:0,Y:0,orphanC:0,review:0};
@@ -2252,14 +2292,16 @@ const TSP=(function(){
       const t=tidyRoles(lines, labels, fmt.roles, pm.sep); finalRoles=t.roles; pfx.dropped=t.dropped; pfx.renamed=t.renamed;
     }
     const sg=detectSongs(lines, labels, finalRoles, pm.on?pm.sep:null);
+    const ns=trimNonScript(lines, labels);
+    if(pm.on && ns.quotes){ const t2=tidyRoles(lines, labels, finalRoles, pm.sep); finalRoles=t2.roles; }       // 引文改雜訊後，沒有台詞的角色不留
     const asm=assemble(lines, labels, finalRoles);
     const roles=finalRoles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
     return {roles, rules:fmt.rules, scenes:asm.scenes, labels,
       stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), partialChunkNos:partial.sort((a,b)=>a-b), partialLines, retried, lines:lines.length}, asm.stats,
-        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered}), errors};
+        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered, nonScript:ns}), errors};
   }
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,detectNameColumns,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,detectNameColumns,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 
