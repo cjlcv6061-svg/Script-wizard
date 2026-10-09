@@ -13,8 +13,11 @@
 - 限制：body ≤ 100KB、行數 ≤ 400。
 - 限流（UTC 日）：每 IP `DAILY_PER_IP`（預設 60）、全站 `DAILY_TOTAL`（預設 600），超限回 `429` 並帶 `Retry-After`。計數用 Durable Object（SQLite 版，免費方案可用、計數原子）；只存「IP 雜湊→次數」，隔日重置。被限流的請求不會呼叫上游。
 - LLM：OpenRouter，溫度 0；請求固定帶 `provider: { order, only, allow_fallbacks:true, data_collection:"deny" }`，`only` = `PROVIDERS` 允許清單，**不會**路由到清單外；不使用 `:free` 模型。清單內全部失敗 → 回 `503`（前端顯示「服務暫時無法使用」）。
+- 資料政策：預設 `data_collection:"deny"`（OpenRouter 只用不儲存、不拿來訓練的端點）。**只有**環境變數 `DATA_COLLECTION` 明確設成 `allow` 才會放行，其他任何值都視為 `deny`；`GET /health` 會回報目前的值。放行後，劇本內容可能被供應商用來改進產品（例如 `meta/muse-spark-1.3-contributor` 這類便宜的 contributor 版），**僅供測試，正式服務請保持 `deny`**，並同步修訂同意畫面的說明。
+- 推理型模型：環境變數 `REASONING_EFFORT`（`none`／`minimal`／`low`／`medium`／`high`）會在請求帶 `reasoning:{effort}`，關小思考可以大幅縮短延遲並避免思考吃掉 `max_tokens` 而回空內容；沒設或其他值＝完全不帶，對不推理的模型沒有影響。
 - 輸出過濾：`label` 只放行 `行號|標籤|角色` 格式的行；`format` 只重組白名單欄位。
-- 隱私：不記錄 body；日誌只有時間、IP 雜湊、模式、行數、狀態碼。
+- 隱私：不記錄 body；日誌只有時間、IP 雜湊、模式、行數、狀態碼。**上游（OpenRouter）失敗時**，另外記 `upstream`（狀態碼）、`upstream_code`、`upstream_provider` 與截短到 160 字的 `upstream_msg`，供 `npx wrangler tail` 診斷（429 是額度還是供應商限流、404 是模型或供應商不對…）；訊息裡若出現本次請求的劇本內容（整行或 ≥12 字的片段）或 API key，整段改記 `[redacted]`。
+- 上游回 429 時，Worker 仍回 503，但帶 `error:"upstream_rate_limited"`，前端據此顯示「AI 模型服務目前被限流」（與本站的每日上限 429 不同）。
 - 換模型或換供應商只改環境變數（`MODEL`、`PROVIDERS`），不改程式碼。
 
 ## 站長要做的設定（Claude Code 沒辦法代做）

@@ -108,6 +108,66 @@ const post = (env, body, headers = {}, raw) => worker.fetch(new Request('https:/
     ok(JSON.parse(upstreamCalls[1].init.body).response_format.type === 'json_object', 'format 模式要求 JSON 輸出');
   }
 
+  // ---- 資料政策：預設 deny，只有明確設成 allow 才放行 ----
+  {
+    const sent = async over => { upstreamCalls.length = 0; upstreamImpl = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '1|S|偉' } }] }) }); await post(makeEnv({ DAILY_PER_IP: '100', DAILY_TOTAL: '100', ...over }), labelBody()); return JSON.parse(upstreamCalls[0].init.body).provider.data_collection; };
+    eq(await sent({}), 'deny', '沒設 DATA_COLLECTION：deny');
+    for (const v of ['', 'true', '1', 'yes', 'deny', 'allowed', 'allow all', null]) eq(await sent({ DATA_COLLECTION: v }), 'deny', 'DATA_COLLECTION=' + JSON.stringify(v) + '：仍是 deny');
+    for (const v of ['allow', 'ALLOW', ' Allow ']) eq(await sent({ DATA_COLLECTION: v }), 'allow', 'DATA_COLLECTION=' + JSON.stringify(v) + '：明確放行');
+    for (const [over, want] of [[{}, 'deny'], [{ DATA_COLLECTION: 'allow' }, 'allow']]) {
+      const h = await worker.fetch(new Request('https://w.test/health', { headers: { origin: ORIGIN } }), makeEnv(over), {});
+      eq((await h.json()).data_collection, want, '/health 回報目前的資料政策：' + want);
+    }
+  }
+
+  // ---- 推理強度：預設完全不帶 reasoning；只有明確設成合法值才帶 ----
+  {
+    const body = async (over, mode = 'label') => { upstreamCalls.length = 0; upstreamImpl = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: mode === 'label' ? '1|S|偉' : '{"roles":[{"id":"偉"}],"rules":{}}' } }] }) }); await post(makeEnv({ DAILY_PER_IP: '100', DAILY_TOTAL: '100', ...over }), mode === 'label' ? labelBody() : { mode: 'format', lines: [[1, '偉：你好']] }); return JSON.parse(upstreamCalls[0].init.body); };
+    ok(!('reasoning' in await body({})), '沒設 REASONING_EFFORT：請求完全不帶 reasoning');
+    for (const v of ['', 'fast', 'true', '0', 'extreme', null]) ok(!('reasoning' in await body({ REASONING_EFFORT: v })), 'REASONING_EFFORT=' + JSON.stringify(v) + '：不帶 reasoning');
+    for (const v of ['none', 'minimal', 'low', 'medium', 'high', ' LOW ']) eq((await body({ REASONING_EFFORT: v })).reasoning, { effort: v.trim().toLowerCase() }, 'REASONING_EFFORT=' + JSON.stringify(v) + '：reasoning.effort');
+    eq((await body({ REASONING_EFFORT: 'none' }, 'format')).reasoning, { effort: 'none' }, 'format 模式也帶');
+  }
+  // 上游逾時在日誌裡看得出來（不含劇本內容）
+  {
+    const env = makeEnv({ DAILY_PER_IP: '100', DAILY_TOTAL: '100' });
+    upstreamImpl = async () => { const e = new Error('aborted'); e.name = 'AbortError'; throw e; };
+    logs.length = 0; const r = await post(env, labelBody());
+    const l = JSON.parse(logs[0]);
+    ok(r.status === 503 && l.upstream === 'network' && /timeout/.test(l.upstream_msg) && !logs[0].includes('偉：你好'), '上游逾時：503，日誌記 timeout');
+  }
+
+  // ---- 候選稱呼分類（mode:'roles'）----
+  {
+    const env = makeEnv({ DAILY_PER_IP: '1000', DAILY_TOTAL: '1000' });
+    const cands = [['護士', 8, '護士：請借過'], ['SD Cue', 15, 'SD Cue：煙花聲效'], ['楊', 110, '楊：你好']];
+    const v = validatePayload({ mode: 'roles', candidates: cands, roles: [{ id: '楊淑華', name: '楊淑華', aliases: [] }] });
+    eq([v.mode, v.candidates.length, v.roles.length], ['roles', 3, 1], 'roles 模式：合格的請求');
+    eq(validatePayload({ mode: 'roles', candidates: cands }).roles, undefined, 'roles 模式：角色清單可以沒有');
+    eq(validatePayload({ mode: 'roles', candidates: cands, roles: [] }).roles, undefined, 'roles 模式：空的角色清單也可以');
+    for (const [bad, why] of [[{ mode: 'roles' }, 'no_candidates'], [{ mode: 'roles', candidates: [] }, 'no_candidates'], [{ mode: 'roles', candidates: [['', 1, 'x']] }, 'bad_line'], [{ mode: 'roles', candidates: [['甲'.repeat(25), 1, 'x']] }, 'bad_line'], [{ mode: 'roles', candidates: [['甲', 1.5, 'x']] }, 'bad_line'], [{ mode: 'roles', candidates: [['甲', -1, 'x']] }, 'bad_line'], [{ mode: 'roles', candidates: cands, roles: [{ name: 'x' }] }, 'bad_roles'], [{ mode: 'roles', candidates: Array.from({ length: 151 }, (_, i) => ['稱' + i, 2, 'x']) }, 'too_many_lines']])
+      eq(validatePayload(bad).error, why, 'roles 模式：' + why);
+    eq(validatePayload({ mode: 'roles', candidates: Array.from({ length: 150 }, (_, i) => ['稱' + i, 2, 'x']) }).candidates.length, 150, 'roles 模式：剛好 150 個可以');
+    eq(validatePayload({ mode: 'roles', candidates: [['甲', 2, 'x'.repeat(500)]] }).candidates[0][2].length, 80, '例句截到 80 字');
+
+    // 請求內容與輸出過濾
+    upstreamCalls.length = 0;
+    upstreamImpl = async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: '好的：\n```\n護士|R|\nSD Cue|N|\n楊|A|楊淑華\n不是格式的一行\n楊|X|\n```' } }] }) });
+    const r = await post(env, { mode: 'roles', candidates: cands, roles: [{ id: '楊淑華', name: '楊淑華', aliases: [] }] });
+    const j = await r.json(); const req = JSON.parse(upstreamCalls[0].init.body);
+    eq(j, { ok: true, mode: 'roles', content: '護士|R|\nSD Cue|N|\n楊|A|楊淑華' }, 'roles：只留「稱呼|類別|對應角色」格式、類別限 R／N／A');
+    ok(req.messages[0].content.includes('稱呼分類器') && req.messages[1].content.includes('SD Cue\t15\tSD Cue：煙花聲效') && req.messages[1].content.includes('- 楊淑華：'), 'roles：系統提示詞與候選稱呼表（稱呼、次數、例句）、已知角色都送出');
+    eq([req.max_tokens, 'response_format' in req, req.temperature], [3000, false, 0], 'roles：max_tokens 3000、不要求 JSON、溫度 0');
+    // 日誌只有稱呼數量，不含例句
+    logs.length = 0; await post(env, { mode: 'roles', candidates: [['護士', 8, '極機密例句XYZ']] });
+    const l = JSON.parse(logs[0]);
+    ok(l.mode === 'roles' && l.lines === 1 && l.status === 200 && !logs[0].includes('極機密'), 'roles：日誌記模式與稱呼數量，不含例句');
+    // 上游錯誤訊息若夾帶例句 → [redacted]
+    upstreamImpl = async () => ({ ok: false, status: 400, json: async () => ({ error: { message: 'bad input 極機密例句XYZ這是很長的一句話' } }) });
+    logs.length = 0; await post(env, { mode: 'roles', candidates: [['護士', 8, '極機密例句XYZ這是很長的一句話']] });
+    ok(JSON.parse(logs[0]).upstream_msg === '[redacted]' && !logs[0].includes('極機密'), 'roles：上游錯誤訊息夾帶例句 → [redacted]');
+  }
+
   // ---- 輸出過濾：只回標籤／白名單欄位 ----
   {
     const env = makeEnv({ DAILY_PER_IP: '100', DAILY_TOTAL: '100' });
@@ -133,9 +193,46 @@ const post = (env, body, headers = {}, raw) => worker.fetch(new Request('https:/
     for (const impl of [async () => ({ ok: false, status: 503, json: async () => ({}) }), async () => ({ ok: false, status: 404, json: async () => ({ error: 'No allowed providers' }) }), async () => ({ ok: false, status: 429, json: async () => ({}) }), async () => { throw new Error('net'); }]) {
       upstreamImpl = impl; upstreamCalls.length = 0;
       const r = await post(env, labelBody());
-      ok(r.status === 503 && (await r.json()).error === 'service_unavailable', '上游失敗回 503');
+      const want = impl.toString().includes('429') ? 'upstream_rate_limited' : 'service_unavailable';
+      ok(r.status === 503 && (await r.json()).error === want, '上游失敗回 503（' + want + '）');
       ok(upstreamCalls.length === 1 && upstreamCalls.every(c => c.url.startsWith('https://openrouter.ai/')), '只打一次、且只打 OpenRouter（不自行改路由）');
     }
+  }
+
+  // ---- 上游失敗的原因進日誌（診斷用），但不洩漏劇本內容 ----
+  {
+    const env = makeEnv({ DAILY_PER_IP: '100', DAILY_TOTAL: '100' });
+    const fail = (status, body) => { upstreamImpl = async () => ({ ok: false, status, json: async () => { if (body instanceof Error) throw body; return body; } }); };
+    const secret = '極機密劇本台詞XYZ這一段超過十二個字元';
+    const run = async (lines = [[1, secret]]) => { logs.length = 0; const r = await post(env, { ...labelBody(), lines }, { 'cf-connecting-ip': '203.0.113.77' }); return { r, l: JSON.parse(logs[0]), raw: logs[0] }; };
+
+    fail(429, { error: { code: 429, message: 'Rate limit exceeded: free-models-per-day.\n Add credits', metadata: { provider_name: 'NVIDIA' } } });
+    let { r, l, raw } = await run();
+    ok(r.status === 503 && (await r.json()).error === 'upstream_rate_limited', '上游 429 → 503 upstream_rate_limited');
+    eq([l.status, l.upstream, l.upstream_code, l.upstream_provider], [503, 429, '429', 'NVIDIA'], '日誌記上游狀態碼、錯誤碼、供應商');
+    eq(l.upstream_msg, 'Rate limit exceeded: free-models-per-day. Add credits', '日誌記上游錯誤訊息（空白折疊）');
+    ok(!raw.includes('極機密') && !raw.includes('203.0.113.77'), '仍不含劇本內容與原始 IP');
+
+    fail(404, { error: { message: 'No endpoints found matching your data policy', code: 404 } });
+    ({ l } = await run()); eq([l.upstream, l.upstream_msg], [404, 'No endpoints found matching your data policy'], '404：原因可見');
+    fail(404, { error: 'No allowed providers' });
+    ({ l } = await run()); eq(l.upstream_msg, 'No allowed providers', 'error 是字串也能記');
+    fail(500, { error: { message: 'x'.repeat(500) } });
+    ({ l } = await run()); eq(l.upstream_msg.length, 160, '訊息截到 160 字');
+
+    // 訊息裡出現劇本內容／API key：整段丟掉
+    fail(400, { error: { message: 'Invalid input: ' + secret } });
+    ({ l, raw } = await run()); ok(l.upstream_msg === '[redacted]' && !raw.includes('極機密'), '訊息夾帶整行劇本 → [redacted]');
+    fail(400, { error: { message: 'bad: ' + secret.slice(3, 20) } });
+    ({ l, raw } = await run()); ok(l.upstream_msg === '[redacted]' && !raw.includes('台詞XYZ'), '訊息夾帶劇本片段（≥12 字）→ [redacted]');
+    fail(401, { error: { message: 'Invalid key sk-test-SECRET' } });
+    ({ l, raw } = await run()); ok(l.upstream_msg === '[redacted]' && !raw.includes('sk-test-SECRET'), '訊息夾帶 API key → [redacted]');
+    // 短行（≥4 字）整行出現在訊息裡也算洩漏
+    fail(400, { error: { message: 'bad 偉：你好呀 here' } });
+    ({ l } = await run([[1, '偉：你好呀']])); eq(l.upstream_msg, '[redacted]', '短台詞整行出現 → [redacted]');
+    // 非 JSON 或讀取失敗：照樣 503，只是沒有原因
+    fail(502, new Error('not json'));
+    ({ r, l } = await run()); ok(r.status === 503 && l.upstream === 502 && !('upstream_msg' in l), '上游回非 JSON → 仍回 503，日誌只有狀態碼');
   }
 
   // ---- 限流 ----

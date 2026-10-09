@@ -6,13 +6,13 @@ const { ROLES } = require('../synth');
 const GENDER = { 朗: 'm', 偉: 'm', 玲: 'f', K: 'f' };
 function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 
-// opts: { errRate:每行標錯機率, failRate:每次回應壞掉機率, seed, alwaysFail }
+// opts: { errRate:每行標錯機率, failRate:每次回應壞掉機率, failKind:壞掉的種類（0 漏行／1 角色不在清單／2 重複行／3 漏掉一半；不指定則隨機取前 3 種）, seed, alwaysFail }
 function makeMock(lines, gold, opts = {}) {
   const errRate = opts.errRate || 0, failRate = opts.failRate || 0;
   const al = alignLines(lines.map(l => l.text), gold.map(g => g.text));
   const lab = new Map();
   lines.forEach((l, i) => { const gi = al.pred2gold[i]; lab.set(l.n, gi >= 0 ? { label: gold[gi].label, role: gold[gi].role } : { label: 'N', role: '' }); });
-  const calls = { format: 0, label: 0 };
+  const calls = { format: 0, label: 0, roles: 0 };
   const rng = mulberry32(opts.seed || 1);
   const ids = ROLES.map(r => r.id);
   async function callApi(payload) {
@@ -21,6 +21,10 @@ function makeMock(lines, gold, opts = {}) {
       calls.format++;
       if (opts.alwaysFail) return '{not json';
       return JSON.stringify({ roles: ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(a => a !== r.id), gender: GENDER[r.id] || 'n' })), rules: { speaker_pos: 'mock' } });
+    }
+    if (payload.mode === 'roles') {                       // 候選稱呼分類：預設不回任何判斷；opts.roles(candidates, roles) 可自訂
+      calls.roles++;
+      return opts.roles ? opts.roles(payload.candidates, payload.roles) : '';      // 預設不回任何判斷（相當於模型幫不上忙）
     }
     calls.label++;
     const rows = payload.lines.map(([n]) => {
@@ -35,10 +39,11 @@ function makeMock(lines, gold, opts = {}) {
     });
     let out = rows.map(r => r.join('|'));
     if (opts.alwaysFail || (failRate && rng() < failRate)) {
-      const kind = Math.floor(rng() * 3);
+      const kind = opts.failKind != null ? opts.failKind : Math.floor(rng() * 3);
       if (kind === 0) out.splice(Math.floor(rng() * out.length), 3);                 // 漏行
       else if (kind === 1) out[Math.floor(rng() * out.length)] = rows[0][0] + '|S|不存在的角色';   // 角色不在清單
-      else out.push(out[0]);                                                          // 重複
+      else if (kind === 2) out.push(out[0]);                                          // 重複
+      else out = out.filter((_, i) => i % 2);                                         // 漏掉一半（超過可容忍的比例）
     }
     return '```\n' + out.join('\n') + '\n```';
   }

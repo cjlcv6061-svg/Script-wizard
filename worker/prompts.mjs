@@ -6,9 +6,9 @@ export const TAGS = ['S', 'C', 'D', 'H', 'N'];
 const FORMAT_SYSTEM = `你是「劇本格式分析器」。使用者會給你一份劇本的開頭（以及中後段的幾個片段），每行前面有行號，格式為「行號、Tab 字元、內容」。
 你的工作是歸納這份劇本的格式，只輸出一個 JSON 物件，不要任何其他文字，也不要用 markdown 圍欄。
 
-JSON 格式（下面是格式示範，名字都是虛構的；絕對不要把示範裡的名字抄進你的輸出，只能寫劇本裡真的出現過的）：
+JSON 格式（尖括號 <…> 是說明，不是內容；輸出時每一處都必須換成劇本裡真的出現過的原文，不可保留尖括號，也不可自己編造）：
 {
-  "roles": [ { "id": "甲", "name": "甲先生", "aliases": ["小甲"], "gender": "m" } ],
+  "roles": [ { "id": "<說話者標示用的稱呼>", "name": "<劇本裡的全名；沒有全名就與 id 相同>", "aliases": ["<劇本裡出現過的其他稱呼>"], "gender": "m、f 或 n" } ],
   "rules": {
     "speaker_pos": "角色名出現的位置：prefix（行首，後面接冒號或空格）／own_line（獨立成行，常置中，台詞在下一行）／mixed／other",
     "direction": "舞台指示用的括號種類與樣子，例如：全形括號（）、半形括號()、整行括號",
@@ -20,8 +20,9 @@ JSON 格式（下面是格式示範，名字都是虛構的；絕對不要把示
 
 roles 規則：
 - 列出所有會說話的角色（含只在後段出現的，可從後段片段找）。「全體」「眾人」「四人」這類合說稱呼若單獨作為說話者出現，也當作一個角色。
-- id：該角色在劇本裡最常用、最短的稱呼（1～6 個字元，不含「/」、引號、角落括號）。同一角色只能有一個 id，不同角色 id 不可重複。
-- name：劇本裡出現過的全名；劇本裡沒有出現全名就與 id 相同，不要自己補。aliases：其他在劇本裡出現過的稱呼（簡稱、全名、英文名、暱稱），沒有就給空陣列 []。
+- id：說話者標示所用的稱呼，也就是行首後面接冒號或破折號的名字（如「甲：」「Madison –」），或獨立成行的角色名；取該角色最常用、最短的那個（1～6 個字元，不含「/」、引號、角落括號）。同一角色只能有一個 id，不同角色 id 不可重複。
+- 台詞裡被提到、被叫喚的名字（例如對話中的稱呼、呼喚）不是說話者標示，不要因此新增角色，除非那個名字自己也有台詞行。
+- name：劇本裡一字不差出現過的全名；劇本裡沒有出現全名就與 id 相同。不要加姓氏、不要把 id 擴寫成全名。aliases：其他在劇本裡一字不差出現過的稱呼（簡稱、全名、英文名、暱稱），沒有就給空陣列 []。
 - gender：m 男、f 女、n 不確定。只根據劇本內容（稱謂、他／她、角色描述）判斷，不要憑名字猜。
 - 不要把場景人物表以外的路人、旁白當成角色，除非他們有台詞行。
 - 所有字串都必須是劇本中出現過的原樣文字；不要翻譯、不要改寫。`;
@@ -80,6 +81,23 @@ N  雜訊：頁碼、頁眉頁尾、封面、目錄、作者與版權資訊、�
 23|S|乙
 24|C|`;
 
+const ROLES_SYSTEM = `你是「劇本稱呼分類器」。使用者會給你一份已知角色清單，以及一張「候選稱呼表」。
+候選稱呼是程式從劇本每一行的行首（後面接冒號或破折號）統計出來的詞，每列格式為「稱呼、Tab 字元、出現次數、Tab 字元、一行例句」。
+你的工作是判斷每個候選稱呼屬於哪一類，對每一個稱呼輸出一行：
+稱呼|類別|對應角色
+只輸出這些行，不要輸出任何其他文字、說明、markdown 圍欄。
+
+類別只能是下列三種：
+R  這是一個會說話的角色。包含次要角色與群眾角色（例如以「眾」開頭的合說、有編號或甲乙丙的路人、職稱）。「對應角色」留空。
+A  這是已知角色清單裡某個角色的簡稱、暱稱、不同寫法或加了註記的寫法。「對應角色」必須填清單裡的 id。只有確定指的是同一個人才用 A；不確定就用 R。
+N  這不是說話的角色：音效或燈光提示、歌曲名稱、場次或時間地點標記、人物表或表格的欄位名稱、旁白或敘述句的開頭、網址、標題等。「對應角色」留空。
+
+判斷要點：
+1. 看例句：說話的角色，例句會是一句台詞（口語、有語氣）；音效、歌名、場次標記的例句是說明或標題。
+2. 出現次數很多、例句是對話的，幾乎一定是角色。
+3. 每個候選稱呼必須恰好輸出一行，稱呼必須與輸入完全一致；不可新增、不可漏、不可合併、不可改寫。
+4. 「對應角色」只能使用角色清單裡的 id，不可自創。`;
+
 const clip = (s, max = 200) => (s.length <= max ? s : s.slice(0, Math.floor(max * 0.7)) + '…' + s.slice(-Math.floor(max * 0.25)));
 
 function renderLines(lines, clipLen) {
@@ -110,26 +128,48 @@ export function buildMessages(payload) {
       { role: 'user', content: '角色清單：\n' + renderRoles(payload.roles || []) + '\n\n格式說明：\n' + renderRules(payload.rules) + '\n\n請標記以下每一行：\n' + renderLines(payload.lines, 200) }
     ];
   }
+  if (payload.mode === 'roles') {
+    const rows = (payload.candidates || []).map(([t, n, ex]) => `${t}\t${n}\t${clip(String(ex || ''), 60)}`).join('\n');
+    return [
+      { role: 'system', content: ROLES_SYSTEM },
+      { role: 'user', content: '已知角色清單：\n' + (payload.roles && payload.roles.length ? renderRoles(payload.roles) : '（無）') + '\n\n候選稱呼表（稱呼、出現次數、一行例句）：\n' + rows }
+    ];
+  }
   throw new Error('unknown mode');
 }
 
-// OpenRouter 請求本體。env: { MODEL, PROVIDERS }
+// 資料政策：預設 deny＝OpenRouter 只用「不儲存、不拿來訓練」的端點。只有環境變數 DATA_COLLECTION 明確設成 allow 才放行
+// （例如要測試便宜但會拿資料改進產品的 contributor 版模型）。其他任何值（含空白、true、1）都視為 deny。僅供測試，正式服務請保持 deny。
+export function dataCollection(env) {
+  return String((env && env.DATA_COLLECTION) || '').trim().toLowerCase() === 'allow' ? 'allow' : 'deny';
+}
+
+// 推理型模型（會先輸出思考過程）：思考會吃掉 max_tokens、讓請求又慢又偶爾回空內容。REASONING_EFFORT 設成
+// none／minimal／low／medium／high 其中之一，才會帶 reasoning:{effort}；沒設或其他值＝完全不帶（不推理的模型不受影響）。
+export function reasoningEffort(env) {
+  const v = String((env && env.REASONING_EFFORT) || '').trim().toLowerCase();
+  return ['none', 'minimal', 'low', 'medium', 'high'].includes(v) ? v : '';
+}
+
+// OpenRouter 請求本體。env: { MODEL, PROVIDERS, DATA_COLLECTION?, REASONING_EFFORT? }
 export function buildRequest(env, payload) {
   const providers = String(env.PROVIDERS || 'together,fireworks').split(',').map(s => s.trim()).filter(Boolean);
   const body = {
     model: env.MODEL,
     messages: buildMessages(payload),
     temperature: 0,
-    max_tokens: payload.mode === 'format' ? 3000 : 8000,
+    max_tokens: payload.mode === 'format' || payload.mode === 'roles' ? 3000 : 8000,
     // 只允許清單內供應商，且要求不保留／不訓練
-    provider: { order: providers, only: providers, allow_fallbacks: true, data_collection: 'deny' }
+    provider: { order: providers, only: providers, allow_fallbacks: true, data_collection: dataCollection(env) }
   };
+  const effort = reasoningEffort(env);
+  if (effort) body.reasoning = { effort };
   if (payload.mode === 'format') body.response_format = { type: 'json_object' };
   return body;
 }
 
 // 只放行結構化內容，避免把劇本原文透過 Worker 回傳。
-// label：只保留「行號|標籤|角色」格式的行；format：解析 JSON 後只重組白名單欄位。
+// label：只保留「行號|標籤|角色」格式的行；roles：只保留「稱呼|類別|對應角色」格式的行；format：解析 JSON 後只重組白名單欄位。
 export function filterOutput(mode, text) {
   const t = String(text || '').replace(/^\s*```[a-z]*\s*|\s*```\s*$/gi, '').trim();
   if (mode === 'label') {
@@ -137,6 +177,14 @@ export function filterOutput(mode, text) {
     for (const raw of t.split(/\r?\n/)) {
       const m = raw.trim().match(/^L?(\d{1,7})\s*[|｜]\s*([SCDHN])\s*(?:[|｜]\s*([^|｜\n]{0,60}))?$/);
       if (m) out.push(`${m[1]}|${m[2]}|${(m[3] || '').trim()}`);
+    }
+    return out.join('\n');
+  }
+  if (mode === 'roles') {
+    const out = [];
+    for (const raw of t.split(/\r?\n/)) {
+      const m = raw.trim().match(/^([^|｜\n]{1,24}?)\s*[|｜]\s*([RNA])\s*(?:[|｜]\s*([^|｜\n]{0,24}))?$/);
+      if (m) out.push(`${m[1].trim()}|${m[2]}|${(m[3] || '').trim()}`);
     }
     return out.join('\n');
   }

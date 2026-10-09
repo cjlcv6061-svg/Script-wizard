@@ -133,6 +133,37 @@ assert.throws(() => TSE.makeLine('S', [], '甲'), /角色/); n++;
   assert.throws(() => TSE.addRole(d, ' '), /空白/); n++;
 }
 
+// ---- 歌曲區塊 ----
+{
+  const d = { schema: 2, meta: {}, roles: [{ id: '偉', name: '偉', aliases: [], gender: 'n', spoken: '偉' }], scenes: [{ no: '一', name: '', season: '', place: '', lines: [
+    { s: '偉', t: '你好' }, { d: '（音樂起）' }, { song: '歌一', lyrics: ['啦啦啦', '噠噠噠'] }, { s: '偉', t: '再見' }, { x: '噪音' }] }] };
+  eq(TSE.kindOf(d.scenes[0].lines[2]), 'Y', '歌曲的種類是 Y');
+  eq(TSE.fullText(d.scenes[0].lines[2]), '啦啦啦\n噠噠噠', '歌曲的完整文字＝每行一句歌詞');
+  eq(TSE.makeLine('Y', null, ' 甲 \n\n乙 '), { song: '', lyrics: ['甲', '乙'] }, '歌詞文字拆成多行、去空行');
+  assert.throws(() => TSE.makeLine('Y', null, '  \n '), /歌詞不能空白/); n++;
+  eq(TSE.mergePrev(d, 0, 3), -1, '歌曲區塊不與台詞合併');
+  assert.throws(() => TSE.splitLine(d, 0, 2, 1), /不能拆行/); n++;
+  TSE.setSong(d, 0, 2, ' 新歌名 ', '甲\n乙\n丙');
+  eq(d.scenes[0].lines[2], { song: '新歌名', lyrics: ['甲', '乙', '丙'] }, '改歌名與歌詞');
+  assert.throws(() => TSE.setSong(d, 0, 0, 'x', 'y'), /不是歌曲區塊/); n++;
+  // 一般行 → 歌詞：前面緊接歌曲就併進去
+  d.scenes[0].lines.splice(3, 0, { d: '丁丁丁' });
+  eq(TSE.lineToSong(d, 0, 3), 2, '併進前一首歌');
+  eq(d.scenes[0].lines[2].lyrics, ['甲', '乙', '丙', '丁丁丁'], '歌詞接在後面');
+  eq(d.scenes[0].lines.length, 5, '原本那行被移除');
+  // 前後都不是歌 → 自成一個歌曲區塊
+  eq(TSE.lineToSong(d, 0, 0, '孤單的一句'), 0, '自成歌曲區塊');
+  eq(d.scenes[0].lines[0], { song: '', lyrics: ['孤單的一句'] }, '新歌曲區塊');
+  // 後面緊接歌曲
+  const e = { scenes: [{ lines: [{ d: '前' }, { song: 'X', lyrics: ['後'] }] }] };
+  eq(TSE.lineToSong(e, 0, 0), 0, '併進後一首歌');
+  eq(e.scenes[0].lines, [{ song: 'X', lyrics: ['前', '後'] }], '歌詞接在前面');
+  // 拆成一般行：每句一行指示
+  eq(TSE.songToLines(d, 0, 2), 2, '拆開');
+  eq(d.scenes[0].lines.slice(2, 6).map(l => l.d), ['甲', '乙', '丙', '丁丁丁'], '歌詞變成指示行');
+  eq(TSE.roleUsage(d).get('偉'), 1, '歌曲區塊不計入角色使用數（剩下的台詞只有「再見」）');
+}
+
 // ---- 待校正 ----
 {
   const d = mk();

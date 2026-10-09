@@ -249,6 +249,16 @@
     .dir-text{padding-left:0;font-size:.86rem;}
     .dir-text::before{position:static;margin-right:5px;}
   }
+  /* 歌曲區塊：整段歌詞當參考顯示，不編號、不朗讀、不隱藏、不出題 */
+  .line.song{display:block;border-bottom:none;padding:8px 0;}
+  .song-block{margin-left:72px;border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:10px;padding:10px 14px;background:rgba(127,127,127,.06);}
+  .song-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-weight:700;font-size:.9rem;color:var(--gold);}
+  .song-lyrics{font-size:.96rem;line-height:1.9;color:var(--ink);opacity:.92;}
+  .song-lyrics div{padding:1px 0;}
+  @media(max-width:560px){ .song-block{margin-left:0;} }
+  #songsList .song-block{margin-left:0;margin-bottom:12px;}
+  #songsList .song-scene{font-size:.8rem;letter-spacing:.08em;color:var(--muted);margin:14px 0 6px;}
+  #songsList .song-go{margin-top:8px;}
   .spk{
     flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:3px;
     user-select:none;padding-top:1px;
@@ -787,6 +797,8 @@
   .rv-seal{font-size:.72rem;font-weight:700;min-width:1.7em;height:1.7em;line-height:1.7em;text-align:center;border-radius:4px;color:#1c150f;padding:0 3px;}
   .rv-text{flex:1;min-width:0;line-height:1.6;word-break:break-word;font-size:.94rem;}
   .k-D .rv-text{color:var(--gold);font-style:italic;} .k-X .rv-text{color:var(--muted);text-decoration:line-through;}
+  .k-Y .rv-chip{background:var(--gold);color:#1c150f;} .k-Y .rv-text{white-space:pre-wrap;color:var(--ink);opacity:.9;} .k-Y .rv-text b{display:block;color:var(--gold);}
+  .rv-songtitle{width:100%;box-sizing:border-box;margin-bottom:8px;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:6px;color:var(--ink);font:inherit;padding:6px 8px;}
   .rv-edit{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);}
   .rv-seg{display:flex;gap:6px;margin-bottom:8px;}
   .rv-seg button, .rv-rolechip{font:inherit;font-size:.78rem;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:14px;padding:3px 11px;cursor:pointer;}
@@ -908,6 +920,14 @@
     </div>
   </div>
 </div>
+<div class="modal-backdrop" id="songsModal" style="display:none;z-index:250;">
+  <div class="modal">
+    <button class="modal-close" id="songsClose" aria-label="關閉">×</button>
+    <h2 class="modal-title">歌曲</h2>
+    <div class="rv-help">全劇的歌曲歌詞集中在這裡；歌詞只當參考，不隱藏也不出題。按「到這一場」跳到歌曲出現的位置。</div>
+    <div id="songsList"></div>
+  </div>
+</div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <!-- 進場選角 -->
 <div class="role-overlay" id="roleOverlay" style="display:none;">
@@ -993,6 +1013,7 @@
     <button class="ghost-btn" id="toggleAll" aria-pressed="false">全部顯示</button>
     <button class="ghost-btn" id="dirToggle" aria-pressed="false">顯示舞台指示</button>
     <button class="ghost-btn" id="quizToggle" aria-pressed="false">測驗模式</button>
+    <button class="ghost-btn" id="songsBtn" style="display:none;">🎵 歌曲</button>
     <span class="spacer" style="flex:1"></span>
     <button class="ghost-btn icon-btn" id="fontBtn" title="字級">A＋</button>
   </div>
@@ -1084,7 +1105,7 @@
 /* ============================================================
    劇本資料（v2 schema，見 SPEC.md 第 4 節）
    scenes[].lines 每行為 {s:說話者, t:台詞(去指示), r?:含內嵌指示原文, seg?:分節}
-   或 {d:獨立舞台指示}。被選角色的台詞需背誦並隱藏。
+   或 {d:獨立舞台指示}、或 {song:標題, lyrics:[歌詞…]}（歌曲區塊：整段顯示，不編號、不朗讀、不隱藏）。被選角色的台詞需背誦並隱藏。
    劇本存在 IndexedDB（見下方 Store），啟動後由首頁選取載入。
    ============================================================ */
 let SCENES = [];
@@ -1187,6 +1208,11 @@ function normalizeScript(raw, fallbackTitle, opts){
       if(!ln || typeof ln!=='object') continue;
       if(typeof ln.d==='string'){ const o={d:ln.d}; if(ln.rv) o.rv=true; lines.push(o); continue; }
       if(typeof ln.x==='string'){ if(keepNoise) lines.push({x:ln.x}); continue; }
+      if(Array.isArray(ln.lyrics)){                              // 歌曲區塊：{song:標題, lyrics:[歌詞…]}，不是要背的台詞
+        const ly=ln.lyrics.filter(x=>typeof x==='string' && x.trim());
+        if(ly.length){ const o={song:typeof ln.song==='string'?ln.song.trim():'', lyrics:ly}; if(ln.rv) o.rv=true; lines.push(o); }
+        continue;
+      }
       if(typeof ln.s==='string' && typeof ln.t==='string'){
         const s=cleanSpk(ln.s);
         if(!s) continue;
@@ -1232,7 +1258,7 @@ function normalizeScript(raw, fallbackTitle, opts){
     scenes:out
   };
 }
-function countScriptLines(data){ let n=0; for(const sc of data.scenes) for(const ln of sc.lines) if(ln.d===undefined && ln.x===undefined) n++; return n; }
+function countScriptLines(data){ let n=0; for(const sc of data.scenes) for(const ln of sc.lines) if(ln.d===undefined && ln.x===undefined && ln.song===undefined) n++; return n; }
 
 async function sha256Hex(text){
   try{
@@ -1519,7 +1545,7 @@ const TSP=(function(){
       const id=cleanId(r.id);
       if(!id || seen.has(id)) continue;
       seen.add(id);
-      const aliases=[]; for(const a of (Array.isArray(r.aliases)?r.aliases:[])){ const s=strOf(a,40); if(s && s!==id && !aliases.includes(s)) aliases.push(s); }
+      const aliases=[]; for(const a of (Array.isArray(r.aliases)?r.aliases:[])){ const s=strOf(a,40).replace(/^[\s:：–—\-]+|[\s:：–—\-]+$/g,''); if(s && s!==id && !aliases.includes(s)) aliases.push(s); }      // 小模型常把「Madison –」連分隔符一起當別名
       roles.push({id, name:strOf(r.name,40)||id, aliases, gender:(r.gender==='m'||r.gender==='f')?r.gender:'n'});
     }
     if(!roles.length) throw new Error('沒有辨識到任何角色');
@@ -1535,7 +1561,15 @@ const TSP=(function(){
     for(const [k,v] of [...m]) { const lk=k.toLowerCase(); if(lk!==k && !m.has(lk)) m.set(lk,v); }   // 英文名大小寫不拘（MADISON／Madison）
     return m;
   }
-  const surfGet=(surf,x)=>surf.get(x)||surf.get(String(x).toLowerCase());
+  // 畫外音標記：「琳V.O.」「良 O.S.」「輝（畫外音）」是「琳／良／輝」在畫外說話；稱呼本身不認得時，去掉標記再找
+  const VO_SUFFIX_RE=/\s*[（(]?\s*(?:V\.?\s?O\.?|O\.?\s?S\.?|畫外音|旁述)\s*[)）]?$/i;
+  const surfGet=(surf,x)=>{
+    const g=surf.get(x)||surf.get(String(x).toLowerCase()); if(g) return g;
+    const base=String(x).replace(VO_SUFFIX_RE,'');
+    return base && base!==x ? (surf.get(base)||surf.get(base.toLowerCase())) : undefined;
+  };
+  // 旁白／畫外音本身當說話者：「旁白：…」「VO：…」。不問模型、不要求出現次數，行首有就是角色（id 用原本的寫法）
+  const NARR_RE=/^(?:V\.?\s?O\.?|O\.?\s?S\.?|畫外音|旁白|旁述|敘述者?|解說|Narrator)$/i;
   // 第二段回應（逐行「行號|標籤|角色」）→ {map:Map(n→{label,role}), dup:[n], bad:[行]}
   function parseLabels(text){
     const map=new Map(), dup=[], bad=[];
@@ -1551,21 +1585,30 @@ const TSP=(function(){
     return {map,dup,bad};
   }
   // 規格 5.3：每個輸入行恰好標一次；標籤須在集合內；S 的角色須在角色清單內。
-  // 角色欄寫成別名時對回 id（無損的容錯）。回傳錯誤清單（空＝通過）。
-  function validateLabels(parsed, sentNums, roles){
-    const errors=[], sent=new Set(sentNums), surf=buildSurfaceMap(roles);
-    for(const n of parsed.dup) errors.push('重複 L'+n);
-    for(const n of sentNums) if(!parsed.map.has(n)) errors.push('缺漏 L'+n);
+  // 角色欄寫成別名時對回 id（無損的容錯）。
+  // checkLabels 把問題分兩類：soft（缺漏、重複、標籤不在集合內、角色不在清單內：只有那幾行不可信，其餘行仍可採用）、
+  // extra（多出不在這一塊的行號：忽略）。整塊要不要採用由呼叫端看 soft 占比決定。
+  // 角色欄常被小模型連「（青年）」之類的註記一起抄進來（文字是「良（青年）：」），比對前先去掉括號註記。
+  const stripRoleNote=x=>String(x).replace(/[（(][^）)]*[）)]/g,'').trim();
+  function checkLabels(parsed, sentNums, roles){
+    const soft=[], extra=[], sent=new Set(sentNums), surf=buildSurfaceMap(roles);
+    for(const n of parsed.dup){ if(sent.has(n)) soft.push({n, msg:'重複 L'+n}); }
+    for(const n of sentNums) if(!parsed.map.has(n)) soft.push({n, msg:'缺漏 L'+n});
     for(const [n,v] of parsed.map){
-      if(!sent.has(n)){ errors.push('多出 L'+n); continue; }
-      if('SCDHN'.indexOf(v.label)<0 || v.label.length!==1){ errors.push('標籤不在集合內 L'+n+'：'+v.label); continue; }
+      if(!sent.has(n)){ extra.push('多出 L'+n); continue; }     // 模型繼續往後編的列：不屬於這一塊，忽略即可
+      if('SCDHN'.indexOf(v.label)<0 || v.label.length!==1){ soft.push({n, msg:'標籤不在集合內 L'+n+'：'+v.label}); continue; }
       if(v.label==='S'){
-        const ids=v.role.split(/\s*[\/／]\s*/).map(x=>x.trim()).filter(Boolean).map(x=>surfGet(surf,x));
-        if(!ids.length || ids.some(x=>!x)) errors.push('角色不在清單內 L'+n+'：'+v.role);
+        const ids=v.role.split(/\s*[\/／]\s*/).map(x=>stripRoleNote(x)).filter(Boolean).map(x=>surfGet(surf,x));
+        if(!ids.length || ids.some(x=>!x)) soft.push({n, msg:'角色不在清單內 L'+n+'：'+v.role});
         else v.role=ids.filter((x,i)=>ids.indexOf(x)===i).join('/');
       }else v.role='';
     }
-    return errors;
+    return {soft, extra};
+  }
+  // 回傳錯誤清單（空＝通過）
+  function validateLabels(parsed, sentNums, roles){
+    const c=checkLabels(parsed, sentNums, roles);
+    return c.soft.map(x=>x.msg).concat(c.extra);
   }
 
   // ---------- 本機規則：內嵌指示、日文標記、說話者前綴、場次標題 ----------
@@ -1631,12 +1674,18 @@ const TSP=(function(){
   // 前綴每個稱呼都必須是已知角色稱呼才剝除，避免把台詞裡的冒號或破折號當成前綴。
   const SPK_SEP=/[、,，\/／&＆和與及]|\s+and\s+/i;
   function splitSpeakerPrefix(text, surf){
-    const m=text.match(/^([^：:–—]{1,40}?)\s*(?:[：:]\s*|\s[–—-]\s+|[–—]\s*)/);
+    const m=text.match(/^([^：:–—]{1,40}?)\s*(?:[：:]\s*|\s[–—-]\s+|[–—]\s*|-\s+)/);
     if(m){
       let dirs='';
       const name=m[1].replace(/[（(][^）)]*[）)]/g,d=>{ dirs+=d; return ''; }).trim();
       const toks=name.split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
-      if(toks.length && toks.every(x=>surfGet(surf,x))) return {rest:text.slice(m[0].length), pre:m[0], dir:dirs, ids:toks.map(x=>surfGet(surf,x))};
+      // 縮寫合說：「老人乙/丙：」＝老人乙＋老人丙。後面不認得的稱呼借用第一個稱呼的開頭再找一次
+      const ids=toks.map((x,i)=>{
+        let id=surfGet(surf,x); if(id || i===0 || x.length>2) return id;
+        for(let k=toks[0].length-1;k>=1 && !id;k--) id=surfGet(surf,toks[0].slice(0,k)+x);
+        return id;
+      });
+      if(toks.length && ids.every(Boolean)) return {rest:text.slice(m[0].length), pre:m[0], dir:dirs, ids};
     }
     return null;
   }
@@ -1659,7 +1708,10 @@ const TSP=(function(){
 
   // ---------- 啟發式標記（不靠 LLM）：LLM 整塊失敗時的後備，也是評測的基準線 ----------
   const TERMINAL_RE=/[.!?。！？…”"」』)）]\s*$/;
-  function heuristicLabels(lines, roles, flag){
+  // opts（前綴格式的劇本才傳）：noOwnLine＝不啟用「單獨成行的角色名 → 下一行是台詞」（人物表的「角色名／演員」會誤觸發）；
+  // sep＝只認這種前綴風格（人物表的「名字 – 簡介」不算台詞）
+  function heuristicLabels(lines, roles, flag, opts){
+    const noOwnLine=!!(opts&&opts.noOwnLine), sep=opts&&opts.sep;
     const surf=buildSurfaceMap(roles);
     const names=[...surf.keys()].sort((a,b)=>b.length-a.length);
     const map=new Map();
@@ -1671,12 +1723,12 @@ const TSP=(function(){
       const t=L.text; const _pt=prevText; prevText=t;
       if(SCENE_NO_RE.test(t.replace(/^[=＝\-—\s　*#]+/,'')) && t.length<=60){ put(L.n,'H'); pending=null; continue; }
       if(isPageNumberLine(t,false) || /^[-–—~]\s*[0-9０-９]{1,4}\s*[-–—~]$/.test(t)){ put(L.n,'N'); continue; }
-      const sp=splitSpeakerPrefix(t,surf);
+      const sp=(!sep || pfxMatch(t,sep,surf))?splitSpeakerPrefix(t,surf):null;
       if(sp){ put(L.n,'S',sp.ids.filter((x,i,ar)=>ar.indexOf(x)===i).join('/')); pending=null; continue; }
       if(/^[（(].*[）)]$/.test(t)){ put(L.n,'D'); continue; }
       // 獨立角色名行（整行就是角色稱呼，可含分隔符）
       const toks=t.replace(/[（(][^）)]*[）)]/g,'').split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
-      if(toks.length && toks.every(x=>surfGet(surf,x)) && t.length<=24){ pending=toks.map(x=>surfGet(surf,x)).filter((x,i,ar)=>ar.indexOf(x)===i).join('/'); put(L.n,'N'); continue; }
+      if(!noOwnLine && toks.length && toks.every(x=>surfGet(surf,x)) && t.length<=24){ pending=toks.map(x=>surfGet(surf,x)).filter((x,i,ar)=>ar.indexOf(x)===i).join('/'); put(L.n,'N'); continue; }
       if(pending){ put(L.n,'S',pending); pending=null; continue; }
       // 沒有角色名的行：接在台詞後面、且上一行沒有以句末標點收尾 → 折行續行；否則視為新的一段（舞台指示）
       put(L.n, ((prev==='S'||prev==='C') && !(TERMINAL_RE.test(_pt) && _pt.length<fullW*0.8))?'C':'D');
@@ -1694,13 +1746,286 @@ const TSP=(function(){
     return true;
   }
 
+  // ---------- 前綴優先：說話者寫在行首時，由規則決定，不由模型決定 ----------
+  // 很多劇本每句台詞都以「兄：」「Madison – 」開頭。這種格式的說話者是文字本身寫明的，
+  // 模型卻可能把這種行標成續行或雜訊、把舞台指示標成台詞。
+  // 所以：先數行首前綴（補上模型漏掉的角色），標記完成後再用前綴覆寫模型標錯的行。
+  // 角色的顯示名稱無法由文字驗證，不去改它（校正頁可改）。
+  const PFX_CJK_CH='[^\\sA-Za-z0-9：:–—（(，。、！？!?"“”「」『』….\\/／&＆]';
+  const PFX_CJK=PFX_CJK_CH+'{1,8}(?:[0-9０-９]{1,2})?';      // 結尾可以帶編號：「路人1」「村民2」（開頭不行，免得把「12:30」當成稱呼）
+  const PFX_LAT="[A-Za-z][A-Za-z.'’-]*(?: [A-Za-z][A-Za-z.'’-]*){0,2}";
+  // 中英混合的稱呼（「亞Toy」「呂VO」「魔老VO」）：中文與英文字母相連
+  const PFX_MIX='(?:'+PFX_CJK_CH+'{1,6}[A-Za-z][A-Za-z.]{0,7}|[A-Za-z]{1,8}'+PFX_CJK_CH+'{1,6})';
+  const PFX_VO='(?:'+PFX_CJK_CH+'{1,6}\\s?(?:V\\.?\\s?O\\.?|O\\.?\\s?S\\.?))';             // 「琳 O.S.」「良V.O.」：角色名＋畫外音標記（中間可以有一個空白）
+  const PFX_TOK='(?:'+PFX_VO+'|'+PFX_MIX+'|'+PFX_CJK+'|'+PFX_LAT+')';
+  // 行首「角色名（指示）：」「角色名 – 」；合說「偉、朗：」「玲／朗／K：」「A and B – 」整串算一個前綴。
+  // 逗號不算合說的分隔符：句子裡的逗號太常見（「無人需要我留低，好自由，跟住我同自己講：」是一句台詞的續行）
+  const PFX_RE=new RegExp('^('+PFX_TOK+'(?:\\s*(?:[、\\/／&＆]|\\s+and\\s+)\\s*'+PFX_TOK+')*)(?:\\s*[（(][^）)]{0,20}[）)])?(?:\\s*([：:])\\s*\\S|\\s([–—-])\\s+\\S)');
+  // 行首前綴的分析：{toks:[稱呼…], kind:'colon'|'dash'}。人物表常見「王家輝 – 王良的大姪兒，男，10歲」（破折號＝簡介），
+  // 台詞卻用冒號；所以前綴風格（colon／dash）要看整份劇本哪一種占絕大多數，另一種不算前綴（sep 為 'mixed' 時兩種都算）。
+  const PFX_DASH_LOOSE_RE=/^([A-Za-z][A-Za-z.'’]*(?: [A-Za-z][A-Za-z.'’]*){0,2})(?:\s+[–—-]\s*|\s*[–—-]\s+)\S/;
+  const PFX_COMMA_RE=/^([^\s：:，,、\/／&＆（(]{1,8}(?:\s*[，,]\s*[^\s：:，,、\/／&＆（(]{1,8})+)\s*[：:]\s*\S/;
+  function pfxMatch(text, sep, surf){
+    const m=text.match(PFX_RE);
+    if(!m){
+      // 逗號合說（「輝，華：阿嫲！」）：逗號在句子裡太常見，所以只有每個稱呼都是已知角色才算
+      const c=surf && sep!=='dash' ? text.match(PFX_COMMA_RE) : null;
+      if(c){ const toks=c[1].split(/\s*[，,]\s*/).map(x=>x.trim()).filter(Boolean); if(toks.length>1 && toks.every(t=>surfGet(surf,t))) return {toks, kind:'colon'}; }
+      // 破折號貼著字的寫法（「Madison- So?」「Alexandre –I don't…」）：稱呼必須是已知角色，且破折號至少有一邊是空白
+      const d=surf && sep!=='colon' ? text.match(PFX_DASH_LOOSE_RE) : null;
+      if(d && surfGet(surf,d[1])) return {toks:[d[1]], kind:'dash'};
+      return null;
+    }
+    const kind=m[2]?'colon':'dash';
+    if(sep && sep!=='mixed' && kind!==sep) return null;
+    const toks=m[1].split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
+    return toks.some(t=>/^https?$/i.test(t))?null:{toks, kind};
+  }
+  // 句尾之後又冒出「角色名：」＝兩句台詞被併成一行（或抽取時折行錯位）。「（指示）角色名：」是常見寫法，不算
+  const INLINE_PFX_RE=new RegExp('[。！？…!?」”]\\s*('+PFX_CJK+'|'+PFX_LAT+')\\s*(?:[：:]|\\s[–—-]\\s)','g');
+  function hasInlinePrefix(text, surf){
+    INLINE_PFX_RE.lastIndex=0;
+    for(let m; (m=INLINE_PFX_RE.exec(text)); ) if(surfGet(surf,m[1].trim())) return true;
+    return false;
+  }
+  // 回傳 {on, roles, prefixLines, added, sep, candidates}。on=false 表示這份劇本不是「行首前綴」格式，一切照舊。
+  function detectPrefix(lines, roles){
+    const surf=buildSurfaceMap(roles);
+    let body=0;
+    const count=sep=>{ const c=new Map(); for(const l of lines){ if(isPageNumberLine(l.text,false)) continue; const m=pfxMatch(l.text,sep); if(m) for(const t of m.toks) c.set(t,(c.get(t)||0)+1); } return c; };
+    for(const l of lines) if(!isPageNumberLine(l.text,false)) body++;
+    // 先決定前綴風格：看「稱呼是已知角色或出現 ≥3 次」的前綴行裡，冒號與破折號各占多少
+    let cnt=count(null);
+    const kinds={colon:0, dash:0};
+    for(const l of lines){ const m=pfxMatch(l.text,null); if(m && m.toks.every(t=>surfGet(surf,t)||cnt.get(t)>=3)) kinds[m.kind]++; }
+    const tot=kinds.colon+kinds.dash;
+    const sep=tot && kinds.colon/tot>=0.85?'colon':tot && kinds.dash/tot>=0.85?'dash':'mixed';
+    if(sep!=='mixed') cnt=count(sep);
+    const parts=l=>{ const m=pfxMatch(l.text,sep,surf); return m?m.toks:[]; };
+    let sum=0; for(const [t,c] of cnt) if(surfGet(surf,t)||c>=3) sum+=c;
+    // 模型沒列出的稱呼要夠常見才補成角色（誤補會讓一般句子被強制標成台詞，比漏補嚴重）：排除偶然出現的「Well – 」「他說：」
+    const minCount=Math.max(5,Math.ceil(sum*0.05));
+    const isRole=t=>surfGet(surf,t)||cnt.get(t)>=minCount||NARR_RE.test(t);
+    let prefixLines=0; for(const l of lines){ const ts=parts(l); if(ts.length && ts.every(isRole)) prefixLines++; }
+    if(prefixLines<Math.max(10,Math.ceil(body*0.25))) return {on:false, prefixLines};
+    const toks=[...cnt].filter(([t])=>isRole(t));
+    const out=roles.map(r=>Object.assign({},r,{aliases:(r.aliases||[]).slice()})), added=[];
+    // 模型的 id 在文字裡沒有任何依據，但它的名稱／別名正是行首前綴（例：id「眉」、別名「妹」，文字寫「妹：」），
+    // 而且兩者毫無關係（不是全名與簡稱的關係）→ 以前綴為準，舊 id 降為別名。這樣送去標記的角色清單本身就是對的。
+    for(const r of out){
+      if(cnt.has(r.id)) continue;
+      const t=[r.name].concat(r.aliases).find(x=>x && cnt.has(x) && !x.includes(r.id) && !r.id.includes(x) && !out.some(o=>o!==r && o.id===x));
+      if(!t) continue;
+      r.aliases=[r.id].concat(r.aliases.filter(a=>a!==t && a!==r.id));
+      if(r.name===r.id) r.name=t;
+      r.id=t;
+    }
+    const surf2=buildSurfaceMap(out);
+    for(const [t] of toks){
+      if(surfGet(surf2,t)) continue;
+      const id=cleanId(t); if(!id || id!==t || surfGet(surf2,id)) continue;
+      // 簡稱：行首只寫「楊：」而模型列的是全名「楊淑華」。恰好有一個角色的名稱含有這個稱呼 → 是同一個人的別名，不新增角色
+      const owners=out.filter(r=>r.name && r.name!==r.id && r.name.includes(t));
+      if(owners.length===1){ owners[0].aliases.push(t); surf2.set(t,owners[0].id); continue; }
+      out.push({id, name:id, aliases:[], gender:'n'}); added.push(id);
+    }
+    // 候選稱呼表（交給模型判斷哪些是角色）：模型第一段沒列出、但行首出現過的稱呼（依次數排序，最多 150 個），各附一行例句
+    const ex=new Map(); for(const l of lines){ const m=pfxMatch(l.text,sep); if(m) for(const t of m.toks) if(!ex.has(t)) ex.set(t,l.text); }
+    const candidates=[...cnt].filter(([t])=>!surfGet(surf,t) && !NARR_RE.test(t) && t.length<=24 && !/[|｜]/.test(t)).sort((x,y)=>y[1]-x[1]).slice(0,150).map(([t,c])=>[t,c,(ex.get(t)||'').slice(0,80)]);
+    return {on:true, roles:out, prefixLines, added, sep, candidates};
+  }
+  // 標記完成後套用：有已知前綴的行一律是台詞；沒有前綴卻被標成台詞的行改用規則標並標為待校正；
+  // 夾著別人前綴的行標為待校正。labels 會被就地修改。
+  function applyPrefix(lines, labels, roles, sep){
+    const surf=buildSurfaceMap(roles), H=heuristicLabels(lines, roles, false, {noOwnLine:true, sep});
+    const st={forced:0, demoted:0, flagged:0};
+    for(const l of lines){
+      const cur=labels.get(l.n);
+      const sp=pfxMatch(l.text,sep,surf)?splitSpeakerPrefix(l.text,surf):null;      // 前綴必須真的在行首（「（指示）玲：…」不算），且是這份劇本的前綴風格
+      let probe=l.text;
+      if(sp){
+        const role=sp.ids.filter((x,i,a)=>a.indexOf(x)===i).join('/');
+        if(!cur || cur.label!=='S' || cur.role!==role){ labels.set(l.n,{label:'S',role}); st.forced++; }
+        else if(cur.rv) labels.set(l.n,{label:'S',role});      // 後備規則標的、行首前綴明確的台詞：這一行是確定的，不必人工看
+        probe=sp.rest;
+      }else if(cur && cur.label==='S' && pfxMatch(l.text,sep,surf) && !cur.rv){
+        // 行首有稱呼，但稱呼不在角色清單（次要角色）：模型填的角色無從核對 → 請人看一眼
+        labels.set(l.n,Object.assign({},cur,{rv:true})); st.flagged++;
+        continue;
+      }else if(cur && cur.label==='S' && !pfxMatch(l.text,sep,surf)){
+        const h=H.get(l.n);
+        labels.set(l.n,{label:h.label, role:h.role||'', rv:true}); st.demoted++;
+        continue;
+      }
+      const fin=labels.get(l.n);
+      if(fin && !fin.rv && fin.label!=='N' && fin.label!=='H' && hasInlinePrefix(probe,surf)){ labels.set(l.n,Object.assign({},fin,{rv:true})); st.flagged++; }
+    }
+    return st;
+  }
+
+  // 候選稱呼分類（第二段之前的一次小請求）：模型對每個候選稱呼回「稱呼|R|」角色、「稱呼|N|」不是角色（音效、歌名、場次…）、
+  // 「稱呼|A|角色id」某個已知角色的簡稱。只認候選表裡的稱呼；對應角色不在清單內的 A 整筆忽略。回傳 Map(稱呼→{k, to?})
+  function parseRoleVerdicts(text, cands, roles){
+    const known=new Set(cands.map(c=>c[0])), surf=buildSurfaceMap(roles), out=new Map();
+    for(const raw of String(text||'').split(/\r\n|\r|\n/)){
+      const m=raw.trim().match(/^(.+?)\s*[|｜]\s*([RNArna])\s*(?:[|｜]\s*(.*))?$/); if(!m) continue;
+      const t=m[1].trim(); if(!known.has(t) || out.has(t)) continue;
+      const k=m[2].toUpperCase();
+      if(k==='A'){ const id=surfGet(surf,stripRoleNote((m[3]||'').trim())); if(id) out.set(t,{k,to:id}); }
+      else out.set(t,{k});
+    }
+    return out;
+  }
+  // 套用判斷：R＝確定是角色（補進清單）；A＝併入已知角色當別名（撤銷自動補進的同名角色）；
+  // N＝不是角色（撤銷自動補進的同名角色；模型第一段自己列的角色不動）。沒有回答的稱呼維持原狀。
+  function applyRoleVerdicts(roles, verdicts, added){
+    const out=roles.map(r=>Object.assign({},r,{aliases:(r.aliases||[]).slice()})), st={role:0, alias:0, noise:0};
+    const idx=id=>out.findIndex(r=>r.id===id);
+    for(const [t,v] of verdicts){
+      const i=idx(t), auto=i>=0 && (added||[]).includes(t);
+      if(v.k==='N'){ if(auto) out.splice(i,1); st.noise++; }
+      else if(v.k==='A'){
+        if(idx(v.to)<0 || v.to===t) continue;
+        if(auto) out.splice(i,1);
+        const j=idx(v.to); if(!out[j].aliases.includes(t)) out[j].aliases.push(t); st.alias++;
+      }else if(v.k==='R'){
+        if(i>=0 || out.some(r=>r.name===t || (r.aliases||[]).includes(t))) continue;
+        const id=cleanId(t); if(!id || id!==t || out.length>=MAX_ROLES) continue;
+        out.push({id, name:id, aliases:[], gender:'n'}); st.role++;
+      }
+    }
+    return {roles:out, stats:st};
+  }
+  const MAX_ROLES=120;      // 角色清單上限（每個標記請求只送這一塊用得到的角色，最多 60 個，所以總數不受 Worker 的 60 限制）
+  const prefixTokens=(text,sep)=>{ const m=pfxMatch(text,sep); return m?m.toks:[]; };
+  // 模型標了清單外的角色，但那一行的行首真的寫著這個稱呼 → 是文字裡的次要角色（第一段樣本沒涵蓋到），
+  // 補進清單；否則整塊會因為一個沒見過的角色被判失敗。行首沒寫的（模型自己編的）不採納。
+  function adoptRoles(p, textOf, roles, compactRoles, sep){
+    const surf=buildSurfaceMap(roles);
+    for(const [n,v] of p.map){
+      if(v.label!=='S' || !v.role || !textOf.has(n)) continue;
+      const toks=prefixTokens(textOf.get(n),sep);
+      for(const part of v.role.split(/\s*[\/／]\s*/).map(x=>stripRoleNote(x)).filter(Boolean)){
+        if(surfGet(surf,part) || roles.length>=MAX_ROLES) continue;
+        const id=cleanId(part);
+        if(!id || id!==part || !toks.includes(part)) continue;
+        roles.push({id, name:id, aliases:[], gender:'n'}); if(compactRoles) compactRoles.push({id, name:id, aliases:[]}); surf.set(id,id);
+      }
+    }
+  }
+  // 前綴格式劇本的角色清單整理（在 applyPrefix 之後）：沒有任何台詞的角色（模型編的）不留；
+  // 名稱／別名若在整份原文裡一次都沒出現過（或只有單一個字，必然出現過、不算依據），就是沒有依據的（例如範例裡的虛構姓氏），名稱改回 id、別名丟掉。
+  function tidyRoles(lines, labels, roles, sep){
+    const used=new Set(), hay=lines.map(l=>l.text).join('\n').toLowerCase(), dropped=[], renamed=[], ptok=new Set();
+    for(const l of lines){
+      const v=labels.get(l.n); if(v && v.label==='S') for(const x of v.role.split('/')) used.add(x);
+      for(const t of prefixTokens(l.text,sep)) ptok.add(t.toLowerCase());
+    }
+    // 有依據＝本身就是行首前綴，或長度 ≥2 且在原文出現過（單字在原文裡必然出現過，不算依據）
+    const supported=x=>{ x=String(x||'').toLowerCase(); return !!x && (ptok.has(x) || (x.length>=2 && hay.includes(x))); };
+    const out=[];
+    for(const r of roles){
+      if(!used.has(r.id)){ dropped.push(r.id); continue; }
+      const keep=r.name===r.id || supported(r.name);
+      if(!keep) renamed.push(r.id);
+      out.push(Object.assign({}, r, {name:keep?r.name:r.id, aliases:(r.aliases||[]).filter(supported)}));
+    }
+    return {roles:out.length?out:roles, dropped, renamed};
+  }
+
   // ---------- 組回（規格 5.3）：依行號，C 併入前一個 S，H 開新場景，N 丟棄（保留為 {x}）----------
   // 折行接回：兩邊都是半形字元（英文等）時補一個空白；中文不補
   const joinParts=(a,b)=>!a?b:(/[!-~]$/.test(a)&&/^[!-~]/.test(b))?a+' '+b:a+b;
+  // ---------- 歌曲區塊：歌詞不是要背的台詞，整段收成一個 {song, lyrics} ----------
+  // 音樂劇的歌詞沒有「角色名：」前綴，模型常把它們標成續行、指示或雜訊，或有些行被當台詞。
+  // 規則（標記完成後才跑，只動標成 C／D／N 的行，不動台詞與標題）：
+  //  ‧種子＝歌手標記行「(合)　…」「合)　…」（標記後面接 Tab 或兩個以上空白），或歌曲標題行「歌曲三：…」「間場歌曲：…」「♪ …」
+  //  ‧從種子往前後延伸：連續的短行（≤40 字）、不是台詞前綴行、不是整行括號的舞台指示、不是音效提示（SD／SL／VO…）、
+  //    前一行是台詞時不吞它的續行；碰到台詞、標題、整行指示就停。
+  //  ‧標題＝標題行冒號後的字；緊接標題的作曲／版權行不放進歌詞。
+  const SONG_TAG_RE=/^\s*(?:[0-9０-９一二三四五六七八九十]{1,3}[\t　 ]+)?(?:[（(][^()（）]{1,14}[)）]|[^()（）\s]{1,6}[)）])(?:[\t　]+| {2,})/;       // 前面可以帶段落編號：「二　楊)　感激主」
+  const SONG_TITLE_HEAD='[（(【\\[]?\\s*(?:間場|開場|終場|序|主題|插曲|片頭|片尾|謝幕)?(?:歌曲|Song|Musical Number)\\s*[0-9０-９一二三四五六七八九十]*\\s*[：:﹕]\\s*';
+  const SONG_TITLE_RE=new RegExp('^\\s*(?:'+SONG_TITLE_HEAD+'\\S|[♪♫🎵])','i');
+  const SONG_TITLE_STRIP=new RegExp('^\\s*(?:'+SONG_TITLE_HEAD+'|[♪♫🎵]+\\s*)','i');
+  const SONG_CUE_RE=/^\s*(?:SD|SL|SR|LX|FX|VO|Cue)\b/i;
+  const SONG_CREDIT_RE=/^\s*(?:曲|詞|作曲|作詞|編曲|粵語新詞|英語詞|原曲|Music|Lyrics|©)\s*[﹕:：]?/i;
+  const SONG_MAX_LINE=40;
+  const songWeight=t=>{ let w=0; for(const ch of t){ if(/\s/.test(ch)) continue; w+=/[⺀-鿿豈-﫿＀-￯　-〿]/.test(ch)?1:0.5; } return w; };
+  // 行尾的音樂提示：「（音樂再起。）」「(眾人唱起)」——接著的短行是歌詞
+  const SONG_CUE_END_RE=/[（(](?![^）)]*(?:完|結束|停|止))[^）)]*(?:音樂(?:再)?起|音樂響起|前奏|歌聲(?:再)?起|開始唱|唱起|接唱|齊唱|Music (?:starts|up|resumes|plays))[^）)]*[）)]\s*$/i;
+  const SONG_END_MARK_RE=/^\s*(?:(?:全劇完|劇終|完|終|END|The End)\s*[。.!！]?\s*$|第[一二三四五六七八九十]稿)/i;       // 劇末標記不是歌詞
+  function detectSongs(lines, labels, roles, sep){
+    const surf=buildSurfaceMap(roles||[]), out=[];
+    const lab=i=>(labels.get(lines[i].n)||{}).label;
+    const isDialogue=i=>{ const m=pfxMatch(lines[i].text, sep||null, surf); return !!(m && m.toks.every(t=>surfGet(surf,t))); };
+    const squash=t=>t.replace(/[\t　]+/g,'　').trim();
+    // 回傳 0＝不吸、1＝吸、2＝整行括號但很像歌詞的回聲（短、沒有句號）：只有前後都是歌詞時才吸
+    const absorbCode=(i,dir)=>{
+      const L=lab(i); if(L!=='C' && L!=='D' && L!=='N') return 0;
+      const t=lines[i].text;
+      if(SONG_CUE_RE.test(t) || SONG_END_MARK_RE.test(t) || isDialogue(i)) return 0;
+      if(/^\s*[（(][^\t]*[)）]\s*$/.test(t) && !SONG_TAG_RE.test(t)) return (!/[。]/.test(t) && songWeight(t)<=24 && !SONG_CUE_END_RE.test(t))?2:0;   // 整行括號＝多半是舞台指示
+      if(SONG_CREDIT_RE.test(t)) return 1;                                               // 作曲／版權行可以很長
+      if(songWeight(t)>SONG_MAX_LINE) return 0;
+      if((t.match(/[A-Za-z]/g)||[]).length>(t.match(/[⺀-鿿]/g)||[]).length && (t.match(/[,，、]/g)||[]).length>=3) return 0;    // 英文人名列表（演員表）不是歌詞
+      if(L==='C' && dir<0 && i>0 && lab(i-1)==='S') return 0;                            // 這行是前一句台詞的續行
+      return (t.replace(/\s+/g,'').length>=2 || SONG_TAG_RE.test(t))?1:0;
+    };
+    const absorbable=(i,dir)=>absorbCode(i,dir)===1;
+    // 往後延伸：括號回聲行（2）後面還接著歌詞（1）就連同吸進去
+    const extend=(from,max)=>{
+      let b=from;
+      while(b+1<lines.length && !taken[b+1] && b-from<max){
+        const c=absorbCode(b+1,+1);
+        if(c===1) b++;
+        else if(c===2 && b+2<lines.length && !taken[b+2] && absorbCode(b+2,+1)===1) b+=2;
+        else break;
+      }
+      return b;
+    };
+    const taken=new Uint8Array(lines.length), blocks=[];
+    for(let i=0;i<lines.length;i++){
+      if(taken[i]) continue;
+      const t=lines[i].text, L=lab(i);
+      if(L==='S' || L==='H') continue;
+      const seedTag=SONG_TAG_RE.test(t) && !/^\s*\d+\)/.test(t), seedTitle=SONG_TITLE_RE.test(t) && !SONG_CUE_RE.test(t);
+      if(!seedTag && !seedTitle) continue;
+      let a=i, b=i;
+      while(a>0 && !taken[a-1] && i-a<60 && absorbable(a-1,-1)) a--;
+      b=extend(i,80);
+      if(!seedTag && b===i) continue;                       // 只有標題、後面沒有歌詞
+      for(let k=a;k<=b;k++) taken[k]=1;
+      blocks.push({a,b});
+    }
+    // 第二輪：沒有歌手標記也沒有標題的歌詞——前一行（台詞或指示）以音樂提示結尾，接著至少兩行連續的短行
+    for(let i=0;i<lines.length-2;i++){
+      if(taken[i] || !SONG_CUE_END_RE.test(lines[i].text) || lab(i)==='H') continue;
+      const b=extend(i,80);
+      if(b-i<2) continue;
+      for(let k=i+1;k<=b;k++) taken[k]=1;
+      blocks.push({a:i+1,b});
+    }
+    blocks.sort((x,y)=>x.a-y.a);
+    let covered=0; for(const bk of blocks) covered+=bk.b-bk.a+1;
+    if(covered>lines.length*0.5) return {songs:[], covered:0};         // 一半以上都是歌？多半是誤判，整批放棄
+    blocks.forEach((bk,id)=>{
+      let title='', gotTitle=false; const nums=[];
+      for(let k=bk.a;k<=bk.b;k++){
+        const t=lines[k].text, n=lines[k].n;
+        if(!gotTitle && SONG_TITLE_RE.test(t)){ gotTitle=true; title=squash(t.replace(SONG_TITLE_STRIP,'')); labels.set(n,{label:'Y',role:'',song:id,part:'title',title}); continue; }
+        if(SONG_CREDIT_RE.test(t) && !nums.length){ labels.set(n,{label:'N',role:'',rv:false}); continue; }       // 緊接標題的作曲／版權行：當雜訊保留
+        labels.set(n,{label:'Y',role:'',song:id,part:'lyric',text:squash(t)}); nums.push(n);
+      }
+      out.push({id,title,lines:nums.length,from:lines[bk.a].n,to:lines[bk.b].n});
+    });
+    return {songs:out, covered};
+  }
+
   function assemble(lines, labels, roles){
     const surf=buildSurfaceMap(roles), roleIds=roles.map(r=>r.id);
-    const scenes=[], stats={S:0,C:0,D:0,H:0,N:0,orphanC:0,review:0};
+    const scenes=[], stats={S:0,C:0,D:0,H:0,N:0,Y:0,orphanC:0,review:0};
     let cur=null, lastS=null;
+    const songItems=new Map();
     const newScene=h=>{ cur={meta:h?parseHeading(h):{no:'',name:'',season:'',place:''}, heads:h?[h]:[], items:[]}; scenes.push(cur); lastS=null; };
     for(const L of lines){
       let lab=labels.get(L.n)||{label:'N',role:'',rv:true};
@@ -1713,6 +2038,13 @@ const TSP=(function(){
         continue;
       }
       if(!cur) newScene('');
+      if(lab.label==='Y'){                                      // 歌曲：同一首的歌詞行併成一個區塊
+        let it=songItems.get(lab.song);
+        if(!it || it.scene!==cur){ it={k:'Y', scene:cur, title:'', lyrics:[]}; songItems.set(lab.song,it); cur.items.push(it); }
+        if(lab.part==='title') it.title=lab.title||''; else it.lyrics.push(lab.text!=null?lab.text:L.text);
+        lastS=null;
+        continue;
+      }
       if(lab.label==='S'){
         let rest=L.text, dir='', pre='';
         const sp=splitSpeakerPrefix(rest,surf);
@@ -1733,6 +2065,7 @@ const TSP=(function(){
       const ls=[];
       for(const it of sc.items){
         if(it.k==='X'){ ls.push({x:it.text}); continue; }
+        if(it.k==='Y'){ if(it.lyrics.length) ls.push({song:it.title, lyrics:it.lyrics}); continue; }
         if(it.k==='D'){ const o={d:it.text}; if(it.rv) o.rv=true; ls.push(o); continue; }
         const full=(it.dir?it.dir:'')+it.text;                 // 前綴上的指示放回最前面
         const sd=stripDirections(full);
@@ -1761,9 +2094,22 @@ const TSP=(function(){
   // ---------- 管線：第一段格式歸納 → 第二段分塊標記 → 組回 ----------
   // callApi(payload) → Promise<string>（Worker 回的 content）；錯誤若帶 fatal=true（429、503、被擋）則整個中止。
   async function runPipeline(o){
-    const lines=o.lines, callApi=o.callApi;
+    const lines=o.lines;
     let aborted=false;
     const prog=p=>{ if(aborted) return; try{ o.onProgress && o.onProgress(p); }catch(e){} };   // 中止後晚到的進度不再回報
+    // 上游暫時忙碌（429 限流、503）會回 retryable 的錯誤：退避重試幾次再放棄。慢的供應商一份劇本要跑十幾二十分鐘，
+    // 不該因為一次短暫限流就把前面已完成的塊全部作廢。其他 fatal（本站每日上限、被擋、取消）照舊立即中止。
+    const delays=o.retryDelays||[4000,12000,30000];
+    const callApi=async payload=>{
+      for(let a=0;;a++){
+        try{ return await o.callApi(payload); }
+        catch(e){
+          if(!(e && e.retryable) || a>=delays.length || aborted) throw e;
+          prog({stage:'retry', wait:delays[a], attempt:a+1, of:delays.length});
+          await new Promise(r=>setTimeout(r,delays[a]));
+        }
+      }
+    };
     prog({stage:'format',done:0,total:1});
     const sample=toWire(sampleForFormat(lines));
     let fmt=null, lastErr=null;
@@ -1771,29 +2117,77 @@ const TSP=(function(){
       try{ fmt=parseFormat(await callApi({mode:'format', lines:sample})); }
       catch(e){ if(e && e.fatal) throw e; lastErr=e; }
     }
-    if(!fmt) throw new Error('無法辨識劇本格式：'+(lastErr&&lastErr.message||'未知錯誤'));
+    if(!fmt){
+      // 第一段兩次都失敗（小模型面對長人物表常常輸出壞掉）：行首有前綴的劇本，直接用前綴找出角色表，不靠模型繼續
+      const pf=detectPrefix(lines, []);
+      if(!pf.on) throw new Error('無法辨識劇本格式：'+(lastErr&&lastErr.message||'未知錯誤'));
+      fmt={roles:pf.roles, rules:{speaker_pos:'prefix（行首「角色名：」或「角色名 – 」，同一行內接著台詞）', direction:'', heading:'', noise:'', notes:''}};
+    }
+    // 前綴優先：行首是「角色名：」的劇本，角色表以文字本身為準（模型的 speaker_pos／角色名常判錯）
+    const pm=detectPrefix(lines, fmt.roles);
+    if(pm.on) fmt={roles:pm.roles, rules:Object.assign({},fmt.rules,{speaker_pos:'prefix（行首「角色名：」或「角色名 – 」，同一行內接著台詞）'})};
+    // 候選稱呼交給模型分類：次要角色（護士、老人甲）、簡稱（楊＝楊淑華）、不是角色的（SD Cue、歌曲三）
+    // 這是選擇性的一步：失敗、回不出可用的答案、Worker 還不認得這個模式（400）都只是略過，維持原本的結果。
+    let roleClassify=null;
+    if(pm.on && pm.candidates.length && o.classifyRoles!==false){
+      prog({stage:'roles'});
+      const known=fmt.roles.filter(r=>!pm.added.includes(r.id)).slice(0,60).map(r=>({id:r.id, name:r.name, aliases:r.aliases}));
+      let verdicts=null;
+      for(let a=0;a<2&&!verdicts;a++){
+        try{
+          const v=parseRoleVerdicts(await callApi({mode:'roles', candidates:pm.candidates, roles:known}), pm.candidates, known);
+          if(v.size) verdicts=v;
+        }catch(e){
+          if(e && e.status===400) break;           // Worker 不認得這個模式（還沒更新）：略過
+          if(e && e.fatal) throw e;
+        }
+      }
+      roleClassify={candidates:pm.candidates.length, answered:verdicts?verdicts.size:0};
+      if(verdicts){ const r=applyRoleVerdicts(fmt.roles, verdicts, pm.added); fmt={roles:r.roles, rules:fmt.rules}; Object.assign(roleClassify, r.stats); }
+    }
     prog({stage:'format',done:1,total:1,roles:fmt.roles.length});
 
-    const compactRoles=fmt.roles.map(r=>({id:r.id,name:r.name,aliases:r.aliases}));
+    // 標記請求送的角色清單：角色不多就全送；角色很多（大型群戲）時，每一塊只送「這一塊行首用到的角色」加上全劇最常出現的 10 個，
+    // 最多 60 個（Worker 單次請求的上限）。整份的角色清單不受這個限制。
+    const roleFreq=new Map();
+    if(pm.on){ const sf=buildSurfaceMap(fmt.roles); for(const l of lines) for(const t of prefixTokens(l.text,pm.sep)){ const id=surfGet(sf,t); if(id) roleFreq.set(id,(roleFreq.get(id)||0)+1); } }
+    const compact=r=>({id:r.id, name:r.name, aliases:r.aliases});
+    const rolesFor=sent=>{
+      const all=fmt.roles;
+      if(!pm.on || all.length<=40) return all.slice(0,60).map(compact);
+      const sf=buildSurfaceMap(all), here=new Set();
+      for(const l of sent) for(const t of prefixTokens(l.text,pm.sep)){ const id=surfGet(sf,t); if(id) here.add(id); }
+      const top=new Set([...all].sort((a,b)=>(roleFreq.get(b.id)||0)-(roleFreq.get(a.id)||0)).slice(0,10).map(r=>r.id));
+      return all.filter(r=>here.has(r.id)||top.has(r.id)).slice(0,60).map(compact);
+    };
     const chunks=chunkLines(lines, o.chunkSize||300, o.overlap==null?10:o.overlap);
     const labels=new Map(), failed=[], errors=[];
     let done=0, retried=0;
     prog({stage:'label',done:0,total:chunks.length,failed:0});
+    const textOf=new Map(lines.map(l=>[l.n,l.text]));
+    const partial=[]; let partialLines=0;
     async function doChunk(ci){
       const ch=chunks[ci], sent=lines.slice(ch.from,ch.to), nums=sent.map(l=>l.n), wire=toWire(sent);
-      let parsed=null;
-      for(let a=0;a<2&&!parsed;a++){
+      const coreN=new Set(lines.slice(ch.start,ch.end).map(l=>l.n));
+      const LIMIT=Math.max(3,Math.floor(coreN.size*0.25));
+      let best=null;                       // 問題行 ≤25% 就採用（其餘行照用模型的標記）；超過才重試一次（取較少的），仍超過整塊失敗。
+      for(let a=0;a<2 && !best;a++){       // 溫度 0 時重試通常得到同一個答案，所以問題不多時不重試（慢的供應商一次重試要好幾分鐘）
         try{
-          const p=parseLabels(await callApi({mode:'label', lines:wire, roles:compactRoles, rules:fmt.rules}));
-          const errs=validateLabels(p, nums, fmt.roles);
-          if(!errs.length) parsed=p; else{ retried++; errors.push({chunk:ci+1, attempt:a+1, errors:errs.slice(0,5), total:errs.length}); }
+          const p=parseLabels(await callApi({mode:'label', lines:wire, roles:rolesFor(sent), rules:fmt.rules}));
+          if(pm.on) adoptRoles(p, textOf, fmt.roles, null, pm.sep);
+          const c=checkLabels(p, nums, fmt.roles), soft=[...new Set(c.soft.map(x=>x.n).filter(n=>coreN.has(n)))];
+          if(soft.length<=LIMIT) best={p, soft};
+          else{ retried++; errors.push({chunk:ci+1, attempt:a+1, errors:c.soft.slice(0,5).map(x=>x.msg), total:soft.length}); }
         }catch(e){ if(e && e.fatal) throw e; retried++; errors.push({chunk:ci+1, attempt:a+1, errors:[String(e&&e.message||e)], total:1}); }
       }
       const core=lines.slice(ch.start,ch.end);
-      if(parsed) for(const l of core) labels.set(l.n, parsed.map.get(l.n));
-      else{
+      if(best){
+        const bad=new Set(best.soft), h=bad.size?heuristicLabels(core, fmt.roles, true, pm.on?{noOwnLine:true, sep:pm.sep}:null):null;     // 只有問題行用本機規則標並標為待校正
+        for(const l of core) labels.set(l.n, bad.has(l.n)?h.get(l.n):best.p.map.get(l.n));
+        if(bad.size){ partial.push(ci+1); partialLines+=bad.size; }
+      }else{
         failed.push(ci+1);
-        const h=heuristicLabels(core, fmt.roles, true);          // 整塊失敗：用本機規則先標，並標為待人工校正
+        const h=heuristicLabels(core, fmt.roles, true, pm.on?{noOwnLine:true, sep:pm.sep}:null);          // 整塊失敗：用本機規則先標，並標為待人工校正
         for(const l of core) labels.set(l.n, h.get(l.n));
       }
       done++; prog({stage:'label',done,total:chunks.length,failed:failed.length});
@@ -1806,13 +2200,20 @@ const TSP=(function(){
         try{ await doChunk(ci); }catch(e){ aborted=true; throw e; }     // fatal：不再派發新塊，免得白白耗掉每日額度
       }
     }));
-    const asm=assemble(lines, labels, fmt.roles);
-    const roles=fmt.roles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
+    let pfx=null, finalRoles=fmt.roles;
+    if(pm.on){
+      pfx=applyPrefix(lines, labels, fmt.roles, pm.sep);
+      const t=tidyRoles(lines, labels, fmt.roles, pm.sep); finalRoles=t.roles; pfx.dropped=t.dropped; pfx.renamed=t.renamed;
+    }
+    const sg=detectSongs(lines, labels, finalRoles, pm.on?pm.sep:null);
+    const asm=assemble(lines, labels, finalRoles);
+    const roles=finalRoles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
     return {roles, rules:fmt.rules, scenes:asm.scenes, labels,
-      stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), retried, lines:lines.length}, asm.stats), errors};
+      stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), partialChunkNos:partial.sort((a,b)=>a-b), partialLines, retried, lines:lines.length}, asm.stats,
+        {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered}), errors};
   }
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,shapeKey,itemsToLines,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 
@@ -1822,9 +2223,9 @@ const TSP=(function(){
    ============================================================ */
 const TSE=(function(){
   const stripMarks=s=>String(s==null?'':s).replace(/[⟦⟧]/g,'');
-  const kindOf=l=>l.d!==undefined?'D':l.x!==undefined?'X':'S';
-  // 編輯框顯示的完整文字：台詞用含指示的原文 r（沒有就用 t），指示／雜訊用原文
-  const fullText=l=>l.d!==undefined?l.d:l.x!==undefined?l.x:(l.r!==undefined?l.r:l.t);
+  const kindOf=l=>l.song!==undefined?'Y':l.d!==undefined?'D':l.x!==undefined?'X':'S';
+  // 編輯框顯示的完整文字：台詞用含指示的原文 r（沒有就用 t），指示／雜訊用原文；歌曲區塊＝每行一句歌詞
+  const fullText=l=>l.song!==undefined?l.lyrics.join('\n'):l.d!==undefined?l.d:l.x!==undefined?l.x:(l.r!==undefined?l.r:l.t);
   const joinText=(a,b)=>!a?b:(/[!-~]$/.test(a)&&/^[!-~]/.test(b))?a+' '+b:a+b;
   const cleanId=x=>String(x==null?'':x).trim().replace(/[<>&"'\/]/g,'');
 
@@ -1834,6 +2235,11 @@ const TSE=(function(){
     text=String(text==null?'':text);
     if(kind==='D') return {d:stripMarks(text)};
     if(kind==='X') return {x:stripMarks(text)};
+    if(kind==='Y'){
+      const ly=text.split('\n').map(x=>stripMarks(x).trim()).filter(Boolean);
+      if(!ly.length) throw new Error('歌詞不能空白');
+      return {song:'', lyrics:ly};
+    }
     if(!roles || !roles.length) throw new Error('台詞需要指定角色');
     const sd=TSP.stripDirections(text);
     if(!sd.t.trim()) return {d:stripMarks(text)};
@@ -1856,7 +2262,7 @@ const TSE=(function(){
     let j=li-1; while(j>=0 && ls[j].x!==undefined) j--;
     if(j<0) return -1;
     const a=ls[j], b=ls[li];
-    if(a.x!==undefined) return -1;
+    if(a.x!==undefined || a.song!==undefined || b.song!==undefined) return -1;          // 歌曲區塊不併入台詞
     const ta=fullText(a), tb=fullText(b);
     let merged;
     if(a.d!==undefined) merged={d:stripMarks(joinText(ta,tb))};
@@ -1876,7 +2282,32 @@ const TSE=(function(){
   }
   function splitLine(data,si,li,pos){
     const l=data.scenes[si].lines[li];
+    if(l.song!==undefined) throw new Error('歌曲區塊不能拆行，請先「拆成一般行」');
     return splitAt(data,si,li,kindOf(l),rolesOf(l),fullText(l),pos);
+  }
+  // ---------- 歌曲區塊 ----------
+  // 改歌曲的標題與歌詞（歌詞每行一句）
+  function setSong(data,si,li,title,text){
+    const l=data.scenes[si].lines[li];
+    if(!l || l.song===undefined) throw new Error('這不是歌曲區塊');
+    const nl=makeLine('Y',null,text); nl.song=stripMarks(title==null?'':title).trim();
+    data.scenes[si].lines[li]=nl; return nl;
+  }
+  // 把歌曲區塊拆成一般行：每句歌詞變成一行指示（不朗讀、不隱藏），再自行改成台詞
+  function songToLines(data,si,li){
+    const ls=data.scenes[si].lines, l=ls[li];
+    if(!l || l.song===undefined) throw new Error('這不是歌曲區塊');
+    const nl=l.lyrics.map(t=>({d:stripMarks(t)}));
+    ls.splice(li,1,...nl); return li;
+  }
+  // 把這一行改成歌詞：前面（或後面）緊接著歌曲區塊就併進去，否則自成一個新的歌曲區塊。回傳歌曲區塊的索引
+  function lineToSong(data,si,li,text){
+    const ls=data.scenes[si].lines, cur=ls[li];
+    const nl=makeLine('Y',null,text==null?fullText(cur):text);
+    const prev=li>0?ls[li-1]:null, next=li+1<ls.length?ls[li+1]:null;
+    if(prev && prev.song!==undefined){ prev.lyrics.push(...nl.lyrics); ls.splice(li,1); return li-1; }
+    if(next && next.song!==undefined){ next.lyrics.unshift(...nl.lyrics); ls.splice(li,1); return li; }
+    ls[li]=nl; return li;
   }
   function uniqueNo(data,want){
     const used=new Set(data.scenes.map(s=>s.no));
@@ -1961,7 +2392,7 @@ const TSE=(function(){
   }
   function clearRv(data,si,li){ const l=data.scenes[si].lines[li]; if(l) delete l.rv; }
 
-  return {stripMarks,kindOf,fullText,rolesOf,makeLine,setLine,mergePrev,splitAt,splitLine,uniqueNo,insertSceneBefore,removeSceneBreak,setSceneField,
+  return {stripMarks,kindOf,fullText,rolesOf,makeLine,setLine,mergePrev,splitAt,splitLine,setSong,songToLines,lineToSong,uniqueNo,insertSceneBefore,removeSceneBreak,setSceneField,
     roleUsage,addRole,renameRole,setGender,mergeRoles,deleteRole,pending,clearRv};
 })();
 /* EDITOR-CORE:END */
@@ -2179,6 +2610,7 @@ function sceneHasHidden(sc){
 
 function buildNav(){
   nav.innerHTML='';
+  if(typeof songsBtn!=='undefined') songsBtn.style.display=hasSongs()?'':'none';
   SCENES.forEach((sc,i)=>{
     if(!sceneHasHidden(sc)) return;       // 沒有被選角色台詞的場次不顯示
     const b=document.createElement('button');
@@ -2219,8 +2651,23 @@ function renderLines(){
   // 句號：只計可朗讀的台詞行（跳過舞台指示），供循環範圍參照
   lineNoMap={};
   let no=0;
-  sc.lines.forEach((ln,idx)=>{ if(ln.d===undefined){ no++; lineNoMap[idx]=no; } });
+  sc.lines.forEach((ln,idx)=>{ if(ln.d===undefined && ln.song===undefined){ no++; lineNoMap[idx]=no; } });
   sc.lines.forEach((ln,idx)=>{
+    // 歌曲區塊：整段歌詞當參考顯示（只練未掌握時略過）
+    if(ln.song!==undefined){
+      if(onlyUnmastered) return;
+      const srow=document.createElement('div');
+      srow.className='line song';
+      srow.dataset.idx=idx;
+      const blk=document.createElement('div'); blk.className='song-block';
+      const head=document.createElement('div'); head.className='song-head';
+      head.textContent='♪ '+(ln.song||'歌曲');
+      const lyr=document.createElement('div'); lyr.className='song-lyrics';
+      ln.lyrics.forEach(t=>{ const d=document.createElement('div'); d.textContent=t; lyr.appendChild(d); });
+      blk.appendChild(head); blk.appendChild(lyr); srow.appendChild(blk);
+      linesEl.appendChild(srow);
+      return;
+    }
     // 獨立舞台指示
     if(ln.d!==undefined){
       if(!showDir || onlyUnmastered) return;   // 隱藏指示時、或只練未掌握時略過
@@ -2381,7 +2828,7 @@ function updateRecallProgress(){
   if(!sc||!fill||!txt) return;
   let mine=0, remembered=0;
   sc.lines.forEach((ln,idx)=>{
-    if(ln.d!==undefined) return;
+    if(ln.d!==undefined || ln.song!==undefined) return;
     if(!isHidden(ln.s)) return;
     mine++;
     if(getRecall(sc.no, idx)==='yes') remembered++;
@@ -2467,6 +2914,32 @@ document.getElementById('optHomo').onchange=(e)=>{ homophoneOK=e.target.checked;
 document.getElementById('optFx').onchange=(e)=>{ perfectFx=e.target.checked; };
 
 // 使用說明
+// ---------- 歌曲頁：全劇歌曲集中列出（歌詞當參考；按鈕跳到該場該首歌的位置）----------
+const songsModal=document.getElementById('songsModal'), songsBtn=document.getElementById('songsBtn');
+function hasSongs(){ return SCENES.some(sc=>sc.lines.some(l=>l.song!==undefined)); }
+function renderSongsModal(){
+  const list=document.getElementById('songsList'); list.innerHTML='';
+  SCENES.forEach((sc,si)=>sc.lines.forEach((ln,li)=>{
+    if(ln.song===undefined) return;
+    const sceneTag=document.createElement('div'); sceneTag.className='song-scene'; sceneTag.textContent=sc.no+(sc.name?'　'+sc.name:'');
+    const blk=document.createElement('div'); blk.className='song-block';
+    const head=document.createElement('div'); head.className='song-head'; head.textContent='♪ '+(ln.song||'歌曲');
+    const lyr=document.createElement('div'); lyr.className='song-lyrics';
+    ln.lyrics.forEach(t=>{ const d=document.createElement('div'); d.textContent=t; lyr.appendChild(d); });
+    const go=document.createElement('button'); go.className='ghost-btn song-go'; go.textContent='到這一場';
+    go.onclick=()=>{
+      songsModal.style.display='none';
+      onlyUnmastered=false; selectScene(si);
+      setTimeout(()=>{ const r=document.querySelector('#lines .line.song[data-idx="'+li+'"]'); if(r) r.scrollIntoView({block:'center',behavior:'smooth'}); },80);
+    };
+    blk.appendChild(head); blk.appendChild(lyr); blk.appendChild(go);
+    list.appendChild(sceneTag); list.appendChild(blk);
+  }));
+}
+songsBtn.onclick=()=>{ renderSongsModal(); songsModal.style.display='flex'; };
+document.getElementById('songsClose').onclick=()=>{ songsModal.style.display='none'; };
+songsModal.addEventListener('click',e=>{ if(e.target===songsModal) songsModal.style.display='none'; });
+
 const helpModal=document.getElementById('helpModal');
 document.getElementById('helpBtn').onclick=()=>{ helpModal.style.display='flex'; };
 document.getElementById('helpClose').onclick=()=>{ helpModal.style.display='none'; };
@@ -2858,7 +3331,7 @@ function inLoopRange(no){
 function firstLoopIdx(){
   const lines=SCENES[current].lines;
   for(let i=0;i<lines.length;i++){
-    if(lines[i].d!==undefined) continue;
+    if(lines[i].d!==undefined || lines[i].song!==undefined) continue;
     const no=lineNoMap[i];
     if(no!==undefined && inLoopRange(no)) return i;
   }
@@ -2902,7 +3375,7 @@ async function play(startIdx){
   while(i<lines.length){
     if(!alive()) return;           // 被停止或換場 → 直接結束，不再往下
     const ln=lines[i];
-    if(ln.d!==undefined){ i++; continue; }   // 舞台指示不朗讀、不留白
+    if(ln.d!==undefined || ln.song!==undefined){ i++; continue; }   // 舞台指示與歌曲區塊不朗讀、不留白
     // 循環範圍：超出上限即視為本輪結束
     if(loopOn){
       const no=lineNoMap[i];
@@ -2970,7 +3443,7 @@ async function play(startIdx){
 // 朗讀中點選某行 → 跳到該行繼續
 function jumpToLine(idx){
   const ln=SCENES[current].lines[idx];
-  if(!ln || ln.d!==undefined) return;   // 指示行不跳
+  if(!ln || ln.d!==undefined || ln.song!==undefined) return;   // 指示行與歌曲區塊不跳
   jumpTo=idx;
   breakCurrent();
 }
@@ -3555,11 +4028,16 @@ function workerUrl(){
   }catch(e){}
   return TSJ_CONFIG.WORKER_URL.replace(/\/+$/,'');
 }
+// 重試等待秒數（毫秒）；只有本機開發才允許用 ?retry=0 關掉等待（端到端測試用）
+function retryDelays(){
+  try{ if(/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && new URLSearchParams(location.search).get('retry')==='0') return [0,0,0]; }catch(e){}
+  return undefined;
+}
 const CONSENT_KEY='tsj_consent_v1';
 const hasConsent=()=>{ try{ return localStorage.getItem(CONSENT_KEY)==='1'; }catch(e){ return false; } };
 const setConsent=()=>{ try{ localStorage.setItem(CONSENT_KEY,'1'); }catch(e){} };
 
-const fatalErr=(msg,status)=>Object.assign(new Error(msg),{fatal:true,status});
+const fatalErr=(msg,status,extra)=>Object.assign(new Error(msg),{fatal:true,status},extra);
 const PARSE={cancelled:false, running:false};
 
 // 對 Worker 發一次請求，回傳模型內容字串。429／503／被擋 → fatal（整個解析中止）；502（模型輸出壞掉）→ 非 fatal（該塊重試）。
@@ -3579,7 +4057,11 @@ async function workerCall(payload){
   if(PARSE.cancelled) throw fatalErr('已取消');
   let body=null; try{ body=await res.json(); }catch(e){}
   if(res.status===429) throw fatalErr(body&&body.reason==='global'?'今天全站的解析次數已用完，請明天再試':'你今天的解析次數已用完（每人每日有上限），請明天再試',429);
-  if(res.status===503) throw fatalErr('服務暫時無法使用，請稍後再試',503);
+  if(res.status===503){
+    const limited=body&&body.error==='upstream_rate_limited';
+    // 上游限流或暫時失敗：交給管線退避重試（重試用完才會中止）；尚未設定（not_configured）重試也沒用
+    throw fatalErr(limited?'AI 模型服務目前被限流（免費額度用完或供應商忙碌），請稍後再試':'服務暫時無法使用，請稍後再試',503,{retryable:!(body&&body.error==='not_configured')});
+  }
   if(res.status===502) throw new Error('模型回應格式不正確');
   if(res.status===413) throw fatalErr('劇本片段過大，無法解析',413);
   if(res.status===403) throw fatalErr('解析服務拒絕了這個來源（網站網址與 Worker 的 ALLOWED_ORIGIN 不符）',403);
@@ -3619,9 +4101,12 @@ async function runParse(){
     try{ const c=await Store.get('parseCache',src.hash); if(c && c.result){ result=c.result; cached=true; } }catch(e){}
     if(!result){
       result=await TSP.runPipeline({
-        lines:src.lines, callApi:workerCall, concurrency:3,
+        lines:src.lines, callApi:workerCall, concurrency:3, retryDelays:retryDelays(),
+        chunkSize:150,      // 小模型一次標 300 行常失控（回傳被截斷或格式壞掉）且很慢；150 行實測穩定而且快得多
         onProgress:p=>{
           if(!live()) return;
+          if(p.stage==='retry'){ document.getElementById('parseDetail').textContent='AI 服務暫時忙碌，'+Math.round(p.wait/1000)+' 秒後自動重試（第 '+p.attempt+'／'+p.of+' 次）…'; return; }
+          if(p.stage==='roles'){ setParseUI({stage:'整理角色…',pct:9,cancel:true}); return; }
           if(p.stage==='format') setParseUI({stage:'分析劇本格式…',pct:p.done?8:3,cancel:true,detail:p.roles?'找到 '+p.roles+' 個角色':''});
           else setParseUI({stage:'逐行標記台詞（第 '+Math.min(p.done+1,p.total)+'／'+p.total+' 段）',pct:8+Math.round(90*p.done/p.total),cancel:true,
             detail:p.failed?p.failed+' 段自動標記失敗，會改用規則先標並請你檢查':''});
@@ -3737,13 +4222,17 @@ function revRowEl(si,li){
   const row=el('div','rv-row k-'+k+(l.rv?' rv':'')+(isOpen?' open':''));
   row.dataset.si=si; row.dataset.li=li;
   const main=el('div','rv-main');
-  main.appendChild(el('span','rv-chip',k==='S'?'台詞':k==='D'?'指示':'雜訊'));
+  main.appendChild(el('span','rv-chip',k==='S'?'台詞':k==='D'?'指示':k==='Y'?'歌曲':'雜訊'));
   if(k==='S'){
     const seals=el('span','rv-seals');
     TSE.rolesOf(l).forEach(id=>{ const s=el('span','rv-seal',sealText(id)); s.style.background=revColor(id); s.title=revRoleName(id); seals.appendChild(s); });
     main.appendChild(seals);
   }
-  main.appendChild(el('span','rv-text',TSE.fullText(l)));
+  if(k==='Y'){
+    const tx=el('span','rv-text'); tx.appendChild(el('b',null,'♪ '+(l.song||'歌曲')+'（'+l.lyrics.length+' 行）'));
+    tx.appendChild(document.createTextNode(TSE.fullText(l)));
+    main.appendChild(tx);
+  }else main.appendChild(el('span','rv-text',TSE.fullText(l)));
   row.appendChild(main);
   if(isOpen) row.appendChild(revEditor(si,li));
   else row.onclick=()=>revOpen(si,li);
@@ -3758,8 +4247,31 @@ function revOpen(si,li){
 }
 function revClose(si){ REV.open=null; revRerenderScene(si); }
 
+function revSongEditor(si,li){
+  const sc=REV.data.scenes[si], l=sc.lines[li];
+  const ed=el('div','rv-edit');
+  ed.onclick=e=>e.stopPropagation();
+  const ti=el('input','rv-songtitle'); ti.value=l.song||''; ti.placeholder='歌名（可留空）'; ti.setAttribute('aria-label','歌名');
+  const ta=el('textarea'); ta.value=TSE.fullText(l); ta.setAttribute('aria-label','歌詞，每行一句');
+  ed.appendChild(ti); ed.appendChild(ta);
+  const done=fn=>{ try{ fn(); REV.open=null; revPersist(); revRerenderScene(si); }catch(e){ toast(e.message); } };
+  const btns=el('div','rv-btns');
+  const add=(label,fn,cls)=>{ const b=el('button','ghost-btn'+(cls?' '+cls:''),label); b.onclick=fn; btns.appendChild(b); return b; };
+  add('儲存',()=>done(()=>TSE.setSong(REV.data,si,li,ti.value,ta.value)),'primary-solid');
+  add('取消',()=>revClose(si));
+  if(l.rv) add('✓ 沒問題',()=>done(()=>TSE.clearRv(REV.data,si,li)));
+  add('拆成一般行',()=>{ if(!confirm('把這首歌拆成一般行（每句歌詞一行指示），再自行改成台詞？')) return; done(()=>TSE.songToLines(REV.data,si,li)); });
+  if(li>0) add('在此行前插入場次',()=>{
+    const h=prompt('新場次的標題（例：第三場　場名）','');
+    if(h===null) return;
+    try{ TSE.insertSceneBefore(REV.data,si,li,h); REV.open=null; revPersist(); revRender(); }catch(e){ toast(e.message); }
+  });
+  ed.appendChild(btns);
+  return ed;
+}
 function revEditor(si,li){
   const sc=REV.data.scenes[si], l=sc.lines[li];
+  if(l.song!==undefined) return revSongEditor(si,li);
   const st={kind:TSE.kindOf(l), roles:new Set(TSE.rolesOf(l))};
   if(st.kind==='S' && !st.roles.size) st.roles.add(REV.data.roles[0]&&REV.data.roles[0].id);
   const ed=el('div','rv-edit');
@@ -3770,7 +4282,7 @@ function revEditor(si,li){
     chips.style.display=st.kind==='S'?'flex':'none';
     [...chips.children].forEach(b=>b.setAttribute('aria-pressed',st.roles.has(b.dataset.id)?'true':'false'));
   };
-  [['S','台詞'],['D','指示'],['X','雜訊']].forEach(([k,t])=>{ const b=el('button',null,t); b.dataset.k=k; b.onclick=()=>{ st.kind=k; if(k==='S' && !st.roles.size && REV.data.roles[0]) st.roles.add(REV.data.roles[0].id); paint(); }; seg.appendChild(b); });
+  [['S','台詞'],['D','指示'],['Y','歌詞'],['X','雜訊']].forEach(([k,t])=>{ const b=el('button',null,t); b.dataset.k=k; b.onclick=()=>{ st.kind=k; if(k==='S' && !st.roles.size && REV.data.roles[0]) st.roles.add(REV.data.roles[0].id); paint(); }; seg.appendChild(b); });
   REV.data.roles.forEach(r=>{ const b=el('button','rv-rolechip',r.name||r.id); b.dataset.id=r.id; b.onclick=()=>{ if(st.roles.has(r.id)) st.roles.delete(r.id); else st.roles.add(r.id); paint(); }; chips.appendChild(b); });
   ed.appendChild(seg); ed.appendChild(chips);
   const ta=el('textarea'); ta.value=TSE.fullText(l);
@@ -3779,7 +4291,7 @@ function revEditor(si,li){
   const done=(fn)=>{ try{ fn(); REV.open=null; revPersist(); revRerenderScene(si); }catch(e){ toast(e.message); } };
   const btns=el('div','rv-btns');
   const add=(label,fn,cls)=>{ const b=el('button','ghost-btn'+(cls?' '+cls:''),label); b.onclick=fn; btns.appendChild(b); return b; };
-  add('儲存',()=>done(()=>TSE.setLine(REV.data,si,li,st.kind,rolesNow(),ta.value)),'primary-solid');
+  add('儲存',()=>done(()=>{ if(st.kind==='Y') TSE.lineToSong(REV.data,si,li,ta.value); else TSE.setLine(REV.data,si,li,st.kind,rolesNow(),ta.value); }),'primary-solid');
   add('取消',()=>revClose(si));
   if(l.rv) add('✓ 沒問題',()=>done(()=>TSE.clearRv(REV.data,si,li)));
   add('與上一行合併',()=>{ try{ const j=TSE.mergePrev(REV.data,si,li); if(j<0) return toast('前面沒有可以合併的行'); REV.open=null; revPersist(); revRerenderScene(si); }catch(e){ toast(e.message); } });
