@@ -141,6 +141,24 @@ ok(!T.looksScanned([['偉：你好嗎，今日天氣好好呀，你去咗邊度�
   ok(few.every(l => !/：/.test(l)), '少於 4 行不算欄位版面：' + few[0]);
   const ragged = []; for (let i = 0; i < 8; i++) ragged.push(it('阿宏', 100 + i * 7, 700 - i * 20, 24), it('台詞' + i, 160 + i * 11, 700 - i * 20, 60));
   ok(T.itemsToLines(ragged).every(l => !/：/.test(l)), '名字欄／台詞欄 x 不固定：不補');
+  // 整份文件判斷名字欄：長段台詞的頁面名字行少（<20%），單頁判斷會放棄；台詞欄 x 隨名字長度不同也要認得
+  {
+    const dense = rowsOf(14, ['阿 宏', '阿 南'], '台 詞 ');
+    const sparse = []; let y = 700;
+    sparse.push(it('曾 母', 113.6, y, 27.6), it(' ', 141.2, y, 11.5), it('今 天 是 好 日 子', 152.7, y, 200)); y -= 20;
+    for (let i = 0; i < 12; i++) { sparse.push(it('接 下 去 的 長 段 台 詞 第 ' + i + ' 行', 113.6, y, 250)); y -= 20; }
+    sparse.push(it('肉 圓 阿 伯', 113.6, y, 58.8), it(' ', 172.4, y, 11.5), it('來 喔 燒 的 喔', 183.9, y, 100));
+    ok(T.itemsToLines(sparse).every(l => !/：/.test(l)), '單頁：名字行太少，不補（這是舊行為）');
+    const keys = T.detectNameColumns([dense, dense, sparse]);
+    ok(keys.has(114) && keys.size === 1, '全文判斷出名字欄 x=114：' + [...keys]);
+    const withKeys = T.itemsToLines(sparse, { nameKeys: keys });
+    ok(/^曾 母：/.test(withKeys[0]) && /^肉 圓 阿 伯：/.test(withKeys[withKeys.length - 1]), '稀疏頁也補上冒號，四字名（台詞欄 x 不同）也算：' + withKeys[withKeys.length - 1]);
+    ok(withKeys.slice(1, -1).every(l => !/：/.test(l)), '長段台詞的續行不補');
+    const scattered = []; for (let i = 0; i < 20; i++) scattered.push(it('阿宏', 100 + i * 9, 700 - i * 20, 24), it('台詞' + i, 170 + i * 9, 700 - i * 20, 60));
+    eq(T.detectNameColumns([scattered]).size, 0, '名字欄位置散亂：不判定');
+    const fewRows = T.detectNameColumns([rowsOf(5, ['阿宏'], '台詞')]);
+    eq(fewRows.size, 0, '全文只有 5 個候選（<12）：不判定');
+  }
   // 目錄（第X場　標題 …… 頁碼）不是說話者欄
   const toc = []; for (let i = 0; i < 8; i++) toc.push(it('第' + '一二三四五六七八'[i] + '場', 100, 700 - i * 20, 40), it('標題' + i + ' ........ ' + (i * 3 + 5), 160, 700 - i * 20, 120));
   ok(T.itemsToLines(toc).every(l => !/：/.test(l)), '目錄的「第X場」不補冒號');
