@@ -1326,15 +1326,35 @@ const TSP=(function(){
   const VERT_MAP={'︵':'（','︶':'）','︷':'｛','︸':'｝','︹':'〔','︺':'〕','︻':'【','︼':'】','︽':'《','︾':'》','︿':'〈','﹀':'〉','﹁':'「','﹂':'」','﹃':'『','﹄':'』','︙':'…','︱':'—','︰':'：'};
   const fromVert=c=>VERT_MAP[c]||c.normalize('NFKC');
   const CJK_GAP=new RegExp('(?<=['+CJK_C+'])[ \\t]+(?=['+CJK_C+'])','g');
-  // opts.nameKeys：整份文件判斷出的名字欄（見 detectNameColumns）；opts.collect：Map，累計這一頁的候選欄位次數（供文件層級判斷用）
-  function itemsToLines(items, opts){
-    const its=items.filter(it=>it && typeof it.str==='string' && it.transform)
+  const LATIN_NAME=/^[A-Za-z][A-Za-z.'’-]*$/;                   // 說話者欄的名字（已去空白）全是拉丁字母
+  // pdf.js 文字項目 → {str,x,y,fs,w,h,dir}；直排專用的標點字形先還原成一般標點
+  function normItems(items){
+    return items.filter(it=>it && typeof it.str==='string' && it.transform)
       .map(it=>({str:it.str.replace(VERT_FORMS,fromVert), x:it.transform[4], y:it.transform[5], fs:Math.abs(it.transform[0])||Math.abs(it.transform[2])||it.height||10, w:it.width||0, h:it.height||0, dir:it.dir}));
+  }
+  function isVertical(its){
     let vChars=0, allChars=0;
     for(const it of its){ const n=it.str.replace(/\s/g,'').length; allChars+=n; if(it.dir==='ttb') vChars+=n; }
-    const vertical=allChars>0 && vChars/allChars>0.5;
+    return allChars>0 && vChars/allChars>0.5;
+  }
+  // 依 y 分列（由上到下），列內由左到右
+  function groupRows(its){
+    const rows=[];
+    for(const it of its.slice().sort((a,b)=> (b.y-a.y) || (a.x-b.x))){
+      const last=rows[rows.length-1];
+      const tol=Math.max(2,it.fs*0.45);
+      if(last && Math.abs(last.y-it.y)<=tol){ last.items.push(it); }
+      else rows.push({y:it.y, items:[it]});
+    }
+    for(const r of rows) r.items.sort((a,b)=>a.x-b.x);
+    return rows;
+  }
+  // opts.nameKeys：整份文件判斷出的名字欄（見 detectNameColumns）；opts.collect：Map，累計這一頁的候選欄位次數（供文件層級判斷用）；
+  // opts.cols：整份文件的雙欄版面（見 detectColumnLayout）。有的話先把這一頁依欄切開，左欄讀完才讀右欄
+  function itemsToLines(items, opts){
+    const its=normItems(items);
     const out=[];
-    if(vertical){
+    if(isVertical(its)){
       its.sort((a,b)=>b.x-a.x);
       const cols=[];
       for(const it of its){
@@ -1349,22 +1369,21 @@ const TSP=(function(){
       }
       return out;
     }
-    its.sort((a,b)=> (b.y-a.y) || (a.x-b.x));
-    const rows=[];
-    for(const it of its){
-      const last=rows[rows.length-1];
-      const tol=Math.max(2,it.fs*0.45);
-      if(last && Math.abs(last.y-it.y)<=tol){ last.items.push(it); }
-      else rows.push({y:it.y, items:[it]});
-    }
-    for(const r of rows) r.items.sort((a,b)=>a.x-b.x);
+    const g=opts && opts.cols ? splitColumns(its,opts.cols) : null;
+    if(g) return [g.top,g.left,g.right,g.bottom].reduce((acc,part)=>acc.concat(horizontalLines(part,opts)),[]);
+    return horizontalLines(its,opts);
+  }
+  // 橫排：每一列成一行
+  function horizontalLines(its, opts){
+    const out=[];
+    const rows=groupRows(its);
     // 左欄寫說話者、右欄寫台詞、中間沒有冒號的版面（論文式劇本、表格式劇本）：
     // 整頁有一組固定的（名字欄 x，台詞欄 x），且至少 4 行、占有字行數的 20% 以上，就在名字後補「：」。
     const nameCell=r=>{
       const ns=r.items.filter(i=>i.str.trim()); if(ns.length<2) return null;
       const a=ns[0], b=ns[1], nm=a.str.replace(/\s+/g,'');
-      if(!nm || nm.length>6 || /[：:。！？，,.!?)）]$/.test(nm) || /^[\d(（]/.test(nm) || SCENE_NO_RE.test(nm)) return null;       // 「第一場　求神 …… 5」這種目錄不是說話者欄
-      if(b.x-(a.x+a.w)<Math.max(5,a.fs*0.7)) return null;                       // 名字與台詞之間要有明顯的欄距
+      if(!nm || nm.length>(LATIN_NAME.test(nm)?12:6) || /[：:。！？，,.!?)）]$/.test(nm) || /^[\d(（]/.test(nm) || SCENE_NO_RE.test(nm)) return null;       // 「第一場　求神 …… 5」這種目錄不是說話者欄；拉丁字母的名字（Anthony、Christina）可以長到 12 字
+      if(b.x-(a.x+a.w)<Math.max(5,a.fs*0.6)) return null;                       // 名字與台詞之間要有明顯的欄距（字間空白約 0.3 倍字級；名字撐滿名字欄時，欄距只剩 0.6 倍）
       return {a, key:Math.round(a.x)+'|'+Math.round(b.x), x1:Math.round(a.x)};
     };
     const keyCount=new Map(); let textRows=0;
@@ -1393,14 +1412,120 @@ const TSP=(function(){
   }
   // 整份文件判斷名字欄：長段台詞的頁面名字行占比低（<20%），單頁判斷會放棄，但名字欄的位置在全文是固定的。
   // 台詞欄的 x 會隨名字長短變動（兩字名與四字名的台詞起點不同），所以只看名字欄的 x：
-  // 候選行（行首短名字、後面隔著明顯欄距）的名字欄 x 在全文累計 ≥12 次、且占全部候選的 40% 以上才算。pagesItems：每頁的 pdf.js 文字項目。
-  function detectNameColumns(pagesItems){
-    const m=new Map();
-    for(const items of pagesItems) itemsToLines(items,{collect:m});
+  // 候選行（行首短名字、後面隔著明顯欄距）的名字欄 x 在全文累計 ≥12 次、且占全部候選的 40% 以上才算。
+  // pagesItems：每頁的 pdf.js 文字項目；opts.cols：整份文件的雙欄版面（要先照欄切開，名字才會排在行首）。
+  function detectNameColumns(pagesItems, opts){
+    const m=new Map(), cols=opts && opts.cols;
+    for(const items of pagesItems) itemsToLines(items,{collect:m, cols});
     let total=0; for(const n of m.values()) total+=n;
     const keys=new Set();
     for(const [k,n] of m) if(n>=12 && n>=total*0.4) keys.add(k);
     return keys;
+  }
+
+  // ---- 雙欄版面（書籍式：每頁兩欄，左欄讀完才讀右欄；劇本選集、得獎劇本集常見）----
+  // pdf.js 只給座標、沒有「欄」的概念；兩欄的基線常常對齊，左欄的一行和右欄的一行就被接成一行，閱讀順序也亂了
+  // （名字、台詞、指示全部交錯，偵測到的台詞行少掉近一半）。
+  // 作法：整份文件決定一組版面——欄位切點 cut（兩欄中間沒有任何項目橫跨的空白帶）、右欄相對左欄的位移 dx、內文行距 pitch；
+  // 每頁依切點把項目分成左欄、右欄，各自成行（先左後右），右欄的 x 減掉 dx，讓兩欄的名字欄／台詞欄 x 對齊（名字欄偵測看的是 x）。
+  // 頁眉頁尾——最上、最下各至多 2 列，和內文之間隔著 >2.5 倍行距（字比內文小的話 >1.5 倍）、或橫跨兩欄——不進分欄，依序放在整頁最前、最後
+  // （頁尾若在左半邊，不先分出去就會卡在左欄與右欄之間，頁眉頁尾的刪除規則看不到它）。
+  // 內文裡有橫跨兩欄的列、或這份文件沒有偵測到雙欄版面，就維持原本的行為（同一水平線的字併成一行）。
+  const COL_FURN_GAP=2.5;
+  // 一頁的欄間空白：去掉最上、最下各 2 列（頁眉頁尾、橫跨兩欄的標題常在這裡）之後，在內文範圍正中央（38%–62%）
+  // 找沒有任何項目橫跨的最寬一段 x 區間（≥14pt），左右兩邊各要有 ≥8 個項目且各占 ≥25%。不是乾淨的雙欄就回傳 null。
+  function pageGutter(its){
+    const rows=groupRows(its.filter(o=>o.str.trim()));
+    if(rows.length<8) return null;
+    const core=[].concat(...rows.slice(2,-2).map(r=>r.items));
+    if(core.length<16) return null;
+    const minX=Math.min(...core.map(o=>o.x)), range=Math.max(...core.map(o=>o.x+o.w))-minX;
+    if(range<200) return null;
+    let best=null, from=null, last=null;
+    const close=()=>{ if(from!==null && last-from>=14 && (!best || last-from>best.hi-best.lo)) best={lo:from, hi:last}; from=null; };
+    for(let c=minX+range*0.38; c<=minX+range*0.62; c+=2){
+      if(core.some(o=>o.x<c && o.x+o.w>c)) close(); else { if(from===null) from=c; last=c; }
+    }
+    close();
+    if(!best) return null;
+    // 空白帶超出中央區域的部分也算進來（字短、欄間很寬的頁面），切點才會落在整條空白帶的正中央
+    const clear=c=>!core.some(o=>o.x<c && o.x+o.w>c);
+    let {lo,hi}=best;
+    while(lo-2>minX && clear(lo-2)) lo-=2;
+    while(hi+2<minX+range && clear(hi+2)) hi+=2;
+    const cut=(lo+hi)/2;
+    const left=core.filter(o=>o.x<cut), right=core.filter(o=>o.x>=cut);
+    if(left.length<8 || right.length<8 || Math.min(left.length,right.length)/core.length<0.25) return null;
+    return {lo, hi, minL:Math.min(...left.map(o=>o.x)), minR:Math.min(...right.map(o=>o.x))};
+  }
+  // 整份文件的雙欄版面：至少 4 頁、且占有字頁數 40% 以上的頁面是乾淨的雙欄，而且這些頁的欄間空白有共同的重疊處
+  // （≥70% 的頁涵蓋同一個切點）。回傳 {cut, dx, pitch, pages, of}，不是雙欄回傳 null。
+  function detectColumnLayout(pagesItems){
+    const ev=[]; let textPages=0;
+    for(const items of pagesItems){
+      const its=normItems(items);
+      if(isVertical(its) || its.filter(o=>o.str.trim()).length<8) continue;                // 直排、封面、章名頁不算
+      textPages++;
+      const g=pageGutter(its); if(g){ g.its=its; ev.push(g); }
+    }
+    if(ev.length<4 || ev.length<textPages*0.4) return null;
+    // 切點：被最多頁的欄間空白涵蓋的那一段（有好幾段就取最寬的）的正中央
+    const ends=[...new Set(ev.flatMap(g=>[g.lo,g.hi]))].sort((p,q)=>p-q);
+    let regions=[], bestN=0;
+    for(let i=0;i<ends.length-1;i++){
+      const a=ends[i], b=ends[i+1], m=(a+b)/2, n=ev.filter(g=>g.lo<=m && g.hi>=m).length;
+      if(n>bestN){ bestN=n; regions=[{lo:a, hi:b}]; }
+      else if(n===bestN && n>0){ const r=regions[regions.length-1]; if(r.hi===a) r.hi=b; else regions.push({lo:a, hi:b}); }
+    }
+    if(!regions.length || bestN<ev.length*0.7) return null;
+    regions.sort((p,q)=>(q.hi-q.lo)-(p.hi-p.lo));
+    const cut=(regions[0].lo+regions[0].hi)/2;
+    const good=ev.filter(g=>g.lo<=cut && g.hi>=cut);
+    const dxs=good.map(g=>g.minR-g.minL).sort((p,q)=>p-q);
+    const dx=dxs[Math.floor(dxs.length/2)];
+    // 內文行距：各欄「相鄰兩列的間距」裡，出現次數 ≥ 最常見者 1/4 的最小值（段落之間空一行的 2 倍間距也很常見，不能取眾數）
+    const hist=new Map();
+    for(const g of good){
+      const text=g.its.filter(o=>o.str.trim());
+      for(const side of [text.filter(o=>o.x<cut), text.filter(o=>o.x>=cut)]){
+        const rows=groupRows(side);
+        for(let i=1;i<rows.length;i++){ const d=Math.round(rows[i-1].y-rows[i].y); if(d>=6) hist.set(d,(hist.get(d)||0)+1); }
+      }
+    }
+    let mx=0; for(const n of hist.values()) if(n>mx) mx=n;
+    const pitch=Math.min(...[...hist].filter(([,n])=>n>=mx*0.25).map(([d])=>d));
+    if(!isFinite(pitch)) return null;
+    return {cut, dx, pitch, pages:good.length, of:textPages};
+  }
+  // 依整份文件的版面把一頁（normItems 的結果）切成 {top, left, right, bottom}；右欄已平移 dx。這一頁不適用就回傳 null。
+  function splitColumns(its, L){
+    const rows=groupRows(its).filter(r=>r.items.some(o=>o.str.trim()));
+    const n=rows.length;
+    if(n<2) return null;
+    const fsOf=rs=>[].concat(...rs.map(r=>r.items.filter(o=>o.str.trim()).map(o=>o.fs))).sort((p,q)=>p-q);
+    const allFs=fsOf(rows), bodyFs=allFs[Math.floor(allFs.length/2)];
+    const spans=r=>r.items.some(o=>o.str.trim() && o.x<L.cut && o.x+o.w>L.cut);
+    // 頁眉頁尾：和內文隔著 >2.5 倍行距；或隔著 >1.5 倍行距而且字比內文小（頁尾常是小一號的字，內文排滿時空隙只剩 2.5 倍）
+    const far=L.pitch*COL_FURN_GAP, gapAfter=i=>rows[i].y-rows[i+1].y;
+    const furniture=(block,gap)=>gap>far || (gap>far*0.6 && Math.max(...fsOf(block))<bodyFs*0.9);
+    let t=0, b=0;
+    while(t<2 && t<n-1 && spans(rows[t])) t++;
+    if(!t) for(let k=0;k<2 && k<n-1;k++) if(furniture(rows.slice(0,k+1),gapAfter(k))){ t=k+1; break; }
+    while(b<2 && n-1-b>t && spans(rows[n-1-b])) b++;
+    if(!b) for(let k=0;k<2 && n-1-k>t;k++) if(furniture(rows.slice(n-1-k),gapAfter(n-2-k))){ b=k+1; break; }
+    const body=rows.slice(t,n-b);
+    if(body.some(spans)) return null;                                                  // 內文中間有橫跨兩欄的列：不是這份文件的雙欄版面
+    const items=rs=>[].concat(...rs.map(r=>r.items));
+    const all=items(body);
+    return {top:items(rows.slice(0,t)), bottom:items(rows.slice(n-b)),
+            left:all.filter(o=>o.x<L.cut), right:all.filter(o=>o.x>=L.cut).map(o=>Object.assign({},o,{x:o.x-L.dx}))};
+  }
+  // 整份 PDF：每頁的文字項目 → 每頁的行。版面（雙欄、名字欄）都在這裡由整份文件決定；前端與離線評測共用這一個入口。
+  function pdfItemsToPages(pagesItems){
+    let cols=null;
+    try{ cols=detectColumnLayout(pagesItems); }catch(e){ cols=null; }                  // 版面偵測只是加分：出任何問題都退回原本的組行方式，不擋住匯入
+    const nameKeys=detectNameColumns(pagesItems,{cols});
+    return pagesItems.map(items=>itemsToLines(items,{nameKeys, cols}));
   }
   // 每個字之間都有空白（PDF 字距排版：「阿 宏 學 長 去 哪 阿 ！」）：整份文件裡「中日文字－空白－中日文字」的比例超過一半，
   // 就去掉夾在文字之間的空白（兩側至少一邊是中日文字或全形符號；數字與數字之間也去）。英文字母之間的空白無法判斷字界，保留。
@@ -2471,7 +2596,7 @@ const TSP=(function(){
         {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered, nonScript:ns, joinedBrackets:jb}), errors};
   }
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,numberedEdgeDrops,shapeKey,itemsToLines,detectNameColumns,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,trimCastTables,joinOpenBrackets,detectDirPairs,normPunct,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,numberedEdgeDrops,shapeKey,itemsToLines,detectNameColumns,detectColumnLayout,pdfItemsToPages,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,trimCastTables,joinOpenBrackets,detectDirPairs,normPunct,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 
@@ -4187,8 +4312,7 @@ async function extractPdf(buf){
     const tc=await page.getTextContent();
     pageItems.push(tc.items);
   }
-  const nameKeys=TSP.detectNameColumns(pageItems);       // 左欄說話者／右欄台詞的版面：欄位位置由整份文件決定
-  return pageItems.map(items=>TSP.itemsToLines(items,{nameKeys}));
+  return TSP.pdfItemsToPages(pageItems);                // 雙欄版面、左欄說話者／右欄台詞的名字欄：位置都由整份文件決定
 }
 function decodeText(buf){
   const u=new Uint8Array(buf);

@@ -28,11 +28,15 @@ def load(indir, vid):
         return json.load(f)
 
 
-def save_gold(outdir, vid, desc, roles, gold):
+def save_gold(outdir, vid, desc, roles, gold, partial=False):
+    # partial：只用了原劇本的一部分（塞不進版面的行略過），端到端對照原劇本沒有意義，評測只看行級
     for i, g in enumerate(gold):
         g['n'] = i + 1
+    out = {'id': vid, 'desc': desc, 'roles': roles, 'gold': gold}
+    if partial:
+        out['partial'] = True
     with open(os.path.join(outdir, vid + '.gold.json'), 'w', encoding='utf-8') as f:
-        json.dump({'id': vid, 'desc': desc, 'roles': roles, 'gold': gold}, f, ensure_ascii=False, indent=1)
+        json.dump(out, f, ensure_ascii=False, indent=1)
 
 
 def make_docx(indir, outdir, src, vid, desc, centered_label=None):
@@ -91,6 +95,90 @@ def make_pdf(indir, outdir, src, vid, desc, header_fn, footer_fn, per_page=36, f
         c.showPage()
     c.save()
     save_gold(outdir, vid, desc, d['roles'], gold)
+
+
+def make_pdf_2col(indir, outdir, src, vid, desc, font=DEFAULT_FONT):
+    """書籍式雙欄 PDF（得獎劇本集的版面）：每頁兩欄、左欄讀完才讀右欄；欄內「名字｜台詞」兩個儲存格、沒有冒號；
+    兩欄的基線對齊（pdf.js 會把左右欄同一水平線的字併成一行）；頁尾奇數頁靠右、偶數頁靠左
+    （左半邊的頁尾若不先分出去，會卡在左欄與右欄之間）。標準答案依閱讀順序：左欄、右欄、頁尾。
+    塞不進欄寬的行略過（partial）；場次標題前空一行（欄頂／欄底會出現 2 倍行距）。"""
+    d = load(indir, src)
+    pdfmetrics.registerFont(TTFont('Zen', font, subfontIndex=0))
+    W, H = 1000, 842
+    FS, PITCH, TOP, ROWS = 10, 14, 776, 51
+    X0 = (57, 540)                  # 兩欄名字儲存格的 x：相差 483，欄間空白 477–540
+    CELL, MAXW = 60, 360            # 台詞儲存格在名字之後 60pt（容得下「偉／玲／朗」）、寬 360pt
+    wid = lambda t, fs=FS: pdfmetrics.stringWidth(t, 'Zen', fs)
+    body = [dict(g, text=subst(g['text'])) for g in d['gold']]
+    face = pdfmetrics.getFont('Zen').face
+    missing = {ch for g in body for ch in g['text'] if ord(ch) not in face.charToGlyph}
+    if missing:
+        print('警告：字型缺字，請加進 SUBST：', ''.join(sorted(missing)))
+    # 排成一欄一欄的列：(kind, name, text, goldrow)；kind: S 名字＋台詞、C 台詞續行、D 指示、H 標題、_ 空行
+    seq, skipped = [], 0
+    for g in body:
+        t = g['text']
+        if g['label'] == 'S' and '：' in t:
+            name, rest = t.split('：', 1)
+            if wid(rest) > MAXW:
+                skipped += 1
+                continue
+            seq.append(('S', name, rest, g))
+        elif g['label'] == 'C':
+            if wid(t) > MAXW:
+                skipped += 1
+                continue
+            seq.append(('C', '', t, g))
+        elif g['label'] in ('D', 'H'):
+            if wid(t, 12 if g['label'] == 'H' else FS) > CELL + MAXW:
+                skipped += 1
+                continue
+            if g['label'] == 'H':
+                seq.append(('_', '', '', None))
+            seq.append((g['label'], '', t, g))
+    cols, cur, used = [], [], 0
+    for item in seq:
+        need = 1
+        if item[0] == '_' and not cur:
+            continue                                      # 欄頂不留空行
+        if used + need > ROWS:
+            cols.append(cur); cur, used = [], 0
+            if item[0] == '_':
+                continue
+        cur.append(item); used += need
+    if cur:
+        cols.append(cur)
+    c = canvas.Canvas(os.path.join(outdir, vid + '.pdf'), pagesize=(W, H))
+    gold = []
+    for pi in range(0, len(cols), 2):
+        pno = pi // 2 + 1
+        for side, col in enumerate(cols[pi:pi + 2]):
+            x0 = X0[side]
+            for row, (kind, name, text, g) in enumerate(col):
+                y = TOP - row * PITCH
+                if kind == '_':
+                    continue
+                if kind == 'S':
+                    c.setFont('Zen', FS); c.drawString(x0, y, name); c.drawString(x0 + CELL, y, text)
+                elif kind == 'C':
+                    c.setFont('Zen', FS); c.drawString(x0 + CELL, y, text)
+                elif kind == 'H':
+                    c.setFont('Zen', 12); c.drawString(x0, y, text)
+                else:
+                    c.setFont('Zen', FS); c.drawString(x0, y, text)
+                gold.append({'text': g['text'], 'label': g['label'], 'role': g['role']})
+        c.setFont('Zen', 8)
+        if pno % 2:
+            c.drawString(W - 200, 23, '合成劇本選集'); c.drawString(W - 48, 24, str(pno))
+            foot = '合成劇本選集 %d' % pno
+        else:
+            c.drawString(35, 24, str(pno)); c.drawString(65, 24, '離地，到着 劇本集')
+            foot = '%d 離地，到着 劇本集' % pno
+        gold.append({'text': foot, 'label': 'N', 'role': ''})
+        c.showPage()
+    c.save()
+    save_gold(outdir, vid, desc, d['roles'], gold, partial=True)
+    print('%s：%d 頁、%d 欄；略過塞不進欄寬的 %d 行' % (vid, (len(cols) + 1) // 2, len(cols), skipped))
 
 
 # ---- 不內嵌字型、靠預先定義 CMap（Adobe-CNS1／ETen-B5）的繁中 PDF：橫排與直排 ----
@@ -170,6 +258,7 @@ def main():
              lambda p: '《離地，到着》· 單數頁' if p % 2 else '劇本草稿 v3 · 雙數頁', lambda p: '第 %d 頁' % p, font=a.font)
     make_pdf(a.indir, a.outdir, 'noisy', 'pdf-messy', 'PDF：封面、目錄、內文頁碼雜訊再加頁眉頁尾',
              lambda p: '《離地，到着》機密　內部排練用', lambda p: 'Page %d of 99' % p, per_page=40, font=a.font)
+    make_pdf_2col(a.indir, a.outdir, 'wrapped', 'pdf-2col', 'PDF：書籍式雙欄（名字｜台詞儲存格、沒有冒號），奇數頁頁尾靠右、偶數頁頁尾靠左', font=a.font)
     make_cns1_pdf(a.outdir, False)
     make_cns1_pdf(a.outdir, True)
     print('已輸出到', a.outdir, sorted(os.listdir(a.outdir)))

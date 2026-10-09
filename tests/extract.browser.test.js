@@ -21,7 +21,7 @@ const exe = findChromium();
 if (!exe) { console.log('- extract.browser：略過（找不到 Chromium）'); process.exit(0); }
 
 const SYN = path.join(ROOT, 'eval/out/synth'), DOCS = path.join(ROOT, 'eval/out/docs');
-if (!fs.existsSync(path.join(DOCS, 'pdf-wrapped.pdf')) || !fs.existsSync(path.join(DOCS, 'pdf-cns1-v.pdf'))) {
+if (!['pdf-wrapped', 'pdf-cns1-v', 'pdf-2col'].every(id => fs.existsSync(path.join(DOCS, id + '.pdf')))) {
   try {
     execFileSync(process.execPath, [path.join(ROOT, 'eval/synth.js'), SYN], { stdio: 'pipe' });
     execFileSync('python3', [path.join(ROOT, 'eval/build_docs.py'), SYN, DOCS], { stdio: 'pipe', cwd: ROOT });
@@ -57,7 +57,7 @@ const ok = (c, m) => { assert(c, m); n++; };
 
   // ---- 檔案：與標準答案對齊 ----
   const report = [];
-  for (const id of ['docx-colon', 'docx-centered', 'pdf-wrapped', 'pdf-centered', 'pdf-messy', 'pdf-cns1-h', 'pdf-cns1-v']) {
+  for (const id of ['docx-colon', 'docx-centered', 'pdf-wrapped', 'pdf-centered', 'pdf-messy', 'pdf-2col', 'pdf-cns1-h', 'pdf-cns1-v']) {
     const file = path.join(DOCS, id + (id.startsWith('pdf') ? '.pdf' : '.docx'));
     const gold = JSON.parse(fs.readFileSync(path.join(DOCS, id + '.gold.json'), 'utf8')).gold;
     const page = await fresh();
@@ -79,6 +79,12 @@ const ok = (c, m) => { assert(c, m); n++; };
     if (id.startsWith('pdf-cns1')) {
       ok(src.lines.length >= 70, `${id}：不內嵌字型的繁中 PDF 要能抽出文字（${src.lines.length} 行；沒有 CMap 會是 0 行）`);
       ok(pageNoLeft === 0 && src.removed.length >= 3, `${id}：頁眉頁尾／頁碼已移除（${src.removed.length}）`);
+    }
+    if (id === 'pdf-2col') {
+      // 書籍式雙欄：左欄讀完才讀右欄（內容涵蓋率是順序敏感的對齊）、名字欄補上冒號、奇偶頁（靠右／靠左）的頁尾都移除
+      ok(src.lines.length >= 1700, `${id}：兩欄不能併成一行（${src.lines.length} 行；併行會只剩約一半）`);
+      ok(pageNoLeft === 0 && src.removed.length >= 19, `${id}：頁尾已移除（${src.removed.length}）`);
+      ok(src.lines.filter(l => /^[^\s：]{1,6}： /.test(l)).length >= 1000, `${id}：名字欄補上冒號`);
     }
     if (id === 'pdf-wrapped' || id === 'pdf-centered') {
       ok(pageNoLeft === 0, `${id}：頁碼殘留應為 0（${pageNoLeft}）`);
