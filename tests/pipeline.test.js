@@ -180,7 +180,7 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(r.quotes === 1 && r.far > 100, '回報：引文 1 行、遠離劇本 ' + r.far + ' 行');
     // 台詞很少（<50）：整份不動
     const few = mkl(['（說明）', '甲：好。', '（說明）']), fl = new Map([[1, { label: 'D', role: '' }], [2, { label: 'S', role: '甲' }], [3, { label: 'D', role: '' }]]);
-    eq(T.trimNonScript(few, fl), { quotes: 0, far: 0, cast: 0, ends: 0 }, '台詞少於 50 行：不動');
+    eq(T.trimNonScript(few, fl), { quotes: 0, far: 0, cast: 0, ends: 0, front: 0, list: 0 }, '台詞少於 50 行：不動');
     // 台詞行大多以引號起頭的劇本：不當引文
     const qr = []; for (let i = 0; i < 60; i++) qr.push(['甲：「第' + i + '句。」', 'S']); for (let i = 0; i < 80; i++) qr.push(['說明' + i, 'D']); qr.push(['乙：「孤立的一句。」', 'S']);
     const ql = mkl(qr.map(x => x[0])), qlab = new Map(qr.map((x, i) => [i + 1, { label: x[1], role: x[1] === 'S' ? x[0].split('：')[0] : '' }]));
@@ -242,6 +242,142 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
       // 自我介紹的場景：每人說自己的年齡，但有「我」→ 不是人物表
       const intro = [['甲：我叫小明，今年10歲。', 'S'], ['乙：我是小華，今年11歲。', 'S'], ['丙：我是小玲，今年12歲。', 'S'], ['丁：我是小傑，今年13歲。', 'S'], ['戊：我是小莉，今年9歲。', 'S']].concat(dlg);
       eq(T.trimNonScript(mkl(intro.map(r => r[0])), labelsOf(intro)).cast, 0, '自我介紹的台詞（有「我」）不是人物表');
+    }
+    // --- 前言區塊（第二組）：封面署名／標記行起，到正文開始止，簡介、編劇的話、角色表、分場表整段改雜訊 ---
+    // 仿劇本集的版面（內容是自編的）：每份劇本＝封面（標籤、劇名、「編劇 某某」）→ 簡介 → 編劇的話 → 角色表（可並排分場表）→ 正文 → 全劇完
+    {
+      const prose = (tag, n) => Array.from({ length: n }, (_, i) => [tag + '，這是第' + i + '行介紹文字，沒有任何對白也沒有括號。', 'D']);
+      const dlgOf = (a, b, n, k) => { const rows = []; for (let i = 0; i < n; i++) rows.push([a + '：這是第' + k + '段第' + i + '句。', 'S', a], [b + '：好，我知道了。', 'S', b]); return rows; };
+      // 劇甲：角色表與分場表並排（被併成「角色名　第N場　標題」的行），正文由「開場」標題＋括號指示開始
+      const A = {
+        front: [['某區最佳劇本', 'D'], ['劇甲', 'D'], ['編劇 王小明 李大華', 'D']].concat(prose('簡介甲', 8), [['編劇的話', 'H']], prose('編劇甲', 6),
+          [['角色表 分場表', 'D'], ['甲　開場', 'D'], ['乙　第一場 相遇', 'D'], ['丙', 'D'], ['第二場 離別', 'D'], ['丁', 'D'], ['結局 重逢', 'D']]),
+        body: [['開場', 'H'], ['【燈亮。客廳。】', 'D'], ['第一場 相遇', 'H'], ['【甲坐在沙發上。】', 'D']].concat(dlgOf('甲', '乙', 6, 1),
+          [['第二場 離別', 'H'], ['【乙走進來。】', 'D']], dlgOf('乙', '丙', 6, 2), [['結局 重逢', 'H'], ['【燈暗。】', 'D']], dlgOf('丁', '甲', 4, 3), [['全劇完', 'D']])
+      };
+      // 劇乙：標題與內文第一行擠在一行；角色表有簡介（也有只寫短短一句的），正文由「第一場」標題＋括號指示開始
+      const B = {
+        front: [['某區優秀劇本', 'D'], ['劇乙', 'D'], ['編劇 陳小華', 'D']].concat(prose('簡介乙', 5), [['編劇的話 這齣戲的靈感來自一個夏天的午後，', 'D']], prose('編劇乙', 5),
+          [['角色表', 'H'], ['父親： 許先生，許小風的父親，年輕時和魏女士談戀愛。', 'S', '父親'], ['兒子： 許小風。', 'S', '兒子'], ['母親： 高女士，魏小寶的母親。', 'S', '母親'], ['女兒： 魏小寶。', 'S', '女兒'], ['神父', 'D']]),
+        body: [['第一場', 'H'], ['【幕起。】', 'D']].concat(dlgOf('父親', '兒子', 8, 1), [['全劇完', 'D']])
+      };
+      // 劇丙：沒有場次標題，正文由括號指示開始；角色表只有名字
+      const C = {
+        front: [['某區優秀劇本', 'D'], ['劇丙', 'D'], ['編劇 周小強', 'D']].concat(prose('簡介丙', 3), [['編劇的話', 'H']], prose('編劇丙', 4), [['角色表', 'H'], ['阿華', 'D'], ['趙先生', 'D']]),
+        body: [['【場景為一間小屋內。】', 'D'], ['【幕啟。】', 'D']].concat(dlgOf('阿華', '趙先生', 8, 1), [['全劇完', 'D']])
+      };
+      const rows = A.front.concat(A.body, B.front, B.body, C.front, C.body);
+      const ls = mkl(rows.map(r => r[0])), labels = labelsOf(rows);
+      const before = rows.map(r => r[1]);
+      const r = T.trimNonScript(ls, labels);
+      const after = rows.map((_, i) => labels.get(i + 1).label);
+      const at = (off, len) => after.slice(off, off + len);
+      const offA = 0, offAb = A.front.length, offB = offAb + A.body.length, offBb = offB + B.front.length, offC = offBb + B.body.length, offCb = offC + C.front.length;
+      ok(at(offA, A.front.length).every(x => x === 'N'), '劇甲的封面、簡介、編劇的話、並排的角色表／分場表全是雜訊：' + at(offA, A.front.length).join(''));
+      eq(after.slice(offAb, offB), before.slice(offAb, offB), '劇甲的正文（開場、各場標題、指示、台詞）一行不動');
+      ok(at(offB, B.front.length).every(x => x === 'N'), '劇乙（標題擠在內文第一行、角色表有簡介）整段雜訊：' + at(offB, B.front.length).join(''));
+      eq(after.slice(offBb, offC), before.slice(offBb, offC), '劇乙的正文一行不動（含「第一場」標題）');
+      ok(at(offC, C.front.length).every(x => x === 'N'), '劇丙（角色表只有名字）整段雜訊');
+      eq(after.slice(offCb), before.slice(offCb), '劇丙的正文（沒有標題、由括號指示開始）一行不動');
+      eq(r.front, rows.filter((x, i) => i < offAb || (i >= offB && i < offBb) || (i >= offC && i < offCb)).filter(x => x[1] !== 'N').length, '回報：前言區塊改雜訊的行數');
+      eq(r.list, 0, '清單已在前言區塊裡處理，沒有另外清單');
+      // 前言之後的台詞數沒有少
+      eq(after.filter(x => x === 'S').length, before.filter(x => x === 'S').length - 4, '只少了 4 行（劇乙角色表的 4 列），台詞一句不少');
+    }
+    // 前言區塊不能吞掉劇本：沒有終點、起點在劇本中間、封面後面緊接標題的各種情形
+    {
+      const dlg = (n, k = 0) => { const rows = []; for (let i = 0; i < n; i++) rows.push(['甲：第' + (k + i) + '句。', 'S', '甲'], ['乙：好。', 'S', '乙']); return rows; };
+      const run = rows => { const ls = mkl(rows.map(r => r[0])), lb = labelsOf(rows); const r = T.trimNonScript(ls, lb); return { r, after: rows.map((_, i) => lb.get(i + 1).label), ls, lb }; };
+      // 1. 標記行之後 150 行內沒有任何終點：一行都不動（前言很長的話，寧可留著）
+      {
+        const rows = [['角色表', 'H']].concat(Array.from({ length: 170 }, (_, i) => ['這是一段很長的說明文字第' + i + '行，沒有對白。', 'D']), dlg(30));
+        const { r } = run(rows);
+        eq(r.front, 0, '找不到終點（150 行內）：前言區塊規則一行不動');
+      }
+      // 2. 起點在劇本中間：前面已經有台詞、又沒有幕尾標記 → 不是前言
+      {
+        const rows = dlg(30).concat([['目錄', 'D'], ['第一場 客廳', 'H'], ['【燈亮。】', 'D']], dlg(30, 100));
+        const { r, after } = run(rows);
+        eq(r.front, 0, '台詞之後冒出的「目錄」不當前言');
+        eq(after.slice(60, 63), ['D', 'H', 'D'], '那幾行不動');
+      }
+      // 3. 緊接在幕尾標記（全劇完）之後的封面，即使前面有台詞也算前言（劇本集的第二份劇本）
+      {
+        const rows = dlg(30).concat([['全劇完', 'D'], ['某區優秀劇本', 'D'], ['劇乙', 'D'], ['編劇 陳小華', 'D']], [['簡介文字一行，沒有對白。', 'D']], [['第一場', 'H'], ['【幕起。】', 'D']], dlg(30, 200));
+        const { r, after } = run(rows);
+        eq(after.slice(60, 66), ['D', 'N', 'N', 'N', 'N', 'H'], '全劇完不動；封面、簡介改雜訊；第一場標題留著：' + after.slice(60, 66).join(''));
+        ok(r.front === 4, '回報 4 行');
+      }
+      // 4. 署名行後面緊接標題，標題後面的描述不是括號：標題要留著（終點是標題，不是後面的台詞）
+      {
+        const rows = [['編劇：某某', 'D'], ['第一場', 'H'], ['客廳。傍晚。', 'D'], ['哥哥坐在沙發上看報紙，妹妹從廚房走出來。', 'D']].concat(dlg(30));
+        const { r, after } = run(rows);
+        eq(after.slice(0, 4), ['N', 'H', 'D', 'D'], '只有署名行改雜訊，標題與場景描述留著：' + after.slice(0, 4).join(''));
+        eq(r.front, 1, '回報 1 行');
+      }
+      // 5. 「編劇：某某」被標成台詞（模型把封面當對白）：改雜訊；署名行沒有標點，台詞有（導演：各位準備！）所以真的叫導演的角色不受影響
+      {
+        const rows = [['編劇：某某', 'S', '編劇'], ['導演：陳大文', 'S', '導演'], ['第一場', 'H'], ['【開機。】', 'D']].concat(dlg(10), [['導演：各位準備！', 'S', '導演'], ['編劇：這一段要改。', 'S', '編劇']], dlg(10, 50));
+        const { r, after } = run(rows);
+        eq(after.slice(0, 4), ['N', 'N', 'H', 'D'], '封面署名（被標成台詞）改雜訊');
+        eq(after.slice(24, 26), ['S', 'S'], '正文裡真的叫「導演」「編劇」的角色（有驚嘆號／句號的台詞）不動');
+      }
+      // 5b. 標題分成兩行（幕、場）：兩行都是真標題，都留著
+      {
+        const rows = [['編劇：某某', 'D'], ['第一幕', 'H'], ['第一場', 'H'], ['【燈亮。】', 'D']].concat(dlg(30));
+        const { r, after } = run(rows);
+        eq(after.slice(0, 4), ['N', 'H', 'H', 'D'], '複合標題（第一幕＋第一場）都留著：' + after.slice(0, 4).join(''));
+      }
+      // 5c. 沒有封面署名，開頭就是「編劇的話 …」（標題擠在內文第一行）：它自己就是起點
+      {
+        const rows = [['編劇的話 這齣戲的靈感來自一個夏天的午後，', 'D'], ['後來寫成了這個劇本，沒有別的原因。', 'D'], ['第一場', 'H'], ['【幕起。】', 'D']].concat(dlg(30));
+        const { r, after } = run(rows);
+        eq([r.front, after.slice(0, 4)], [2, ['N', 'N', 'H', 'D']], '擠在一行的「編劇的話」當起點：' + after.slice(0, 4).join(''));
+      }
+      // 6. 沒有封面也沒有標記行的劇本：完全不動
+      {
+        const rows = [['第一場', 'H'], ['【燈亮。】', 'D']].concat(dlg(30));
+        eq(run(rows).r.front, 0, '沒有封面署名與標記行：不動');
+      }
+    }
+    // --- 場次清單（分場表）：連續標題、內容在後面又出現 → 清單項目；真的場次標題後面都跟著內容 ---
+    {
+      const dlg = n => { const rows = []; for (let i = 0; i < n; i++) rows.push(['甲：第' + i + '句。', 'S', '甲'], ['乙：好。', 'S', '乙']); return rows; };
+      const scenes = [['第一場 客廳', 'H'], ['第二場 廚房', 'H'], ['第三場 臥室', 'H']];
+      const real = scenes.flatMap(sc => [sc, ['【燈亮。】', 'D']].concat(dlg(6)));
+      const cut = rows => { const ls = mkl(rows.map(r => r[0])), lb = labelsOf(rows); const n = T.dedupeSceneList(ls, lb); return { n, after: rows.map((_, i) => lb.get(i + 1).label) }; };
+      let c = cut([['場次', 'D']].concat(scenes, [['（以上為場次）', 'D']], real));
+      eq([c.n, c.after.slice(1, 4)], [3, ['N', 'N', 'N']], '前面的三行清單改雜訊：' + c.after.slice(0, 6).join(''));
+      eq(c.after.filter(x => x === 'H').length, 3, '真正的三個場次標題留著');
+      // 清單緊接著第一個真標題（同一串）：清單項目改雜訊，最後那個（真的）留著
+      c = cut(scenes.concat([['第一場 客廳', 'H'], ['【燈亮。】', 'D']], dlg(6), real.slice(real.findIndex(x => x[0] === '第二場 廚房'))));
+      eq(c.after.slice(0, 4), ['N', 'N', 'N', 'H'], '清單接著真標題：只留最後一個：' + c.after.slice(0, 4).join(''));
+      // 清單項目之間夾著角色名（兩欄並排被擠在一起）也算
+      c = cut([['第一場 客廳', 'H'], ['阿甲', 'D'], ['第二場 廚房', 'H'], ['阿乙', 'D'], ['第三場 臥室', 'H']].concat(real));
+      eq([c.n, c.after.slice(0, 5)], [3, ['N', 'D', 'N', 'D', 'N']], '標題之間夾著角色名的清單也處理，角色名不動（那是前言區塊的事）');
+      // 每個標題後面都有內容的劇本（場次很短）不是清單，即使標題間距 ≤3 行
+      const short = []; for (const sc of scenes) short.push(sc, ['甲：好。', 'S', '甲'], ['乙：嗯。', 'S', '乙']);
+      eq(cut(short.concat(short)).n, 0, '標題之間隔著台詞：不是清單');
+      // 只有 2 個標題、或後面沒有再出現：不動
+      eq(cut(scenes.slice(0, 2).concat([['（以上為場次）', 'D']], real)).n, 0, '只有 2 行：不動');
+      eq(cut([['第七場 陽台', 'H'], ['第八場 花園', 'H'], ['第九場 屋頂', 'H']].concat(real)).n, 0, '內容後面沒有再出現（是真的標題）：不動');
+      eq(cut([['第一場 客廳', 'H'], ['第七場 陽台', 'H'], ['第八場 花園', 'H']].concat(real)).n, 0, '三行裡只有一行在後面又出現（<60%）：不動');
+    }
+    // --- 職掌稱呼不是角色（detectPrefix）---
+    {
+      const mk = a => a.map((t, i) => ({ n: i + 1, text: t }));
+      const rl = [{ id: '甲', name: '甲', aliases: [], gender: 'n' }, { id: '乙', name: '乙', aliases: [], gender: 'n' }];
+      const dlg = []; for (let i = 0; i < 40; i++) dlg.push('甲：第' + i + '句。', '乙：好。');
+      const credits = ['編劇：某某', '導演：某某', '編劇：另一位', '編劇：第三位', '編劇：第四位', '編劇：第五位', '編劇：第六位'];
+      const pm = T.detectPrefix(mk(credits.concat(dlg)), rl);
+      ok(pm.on && !pm.roles.some(r => r.id === '編劇') && !pm.candidates.some(c => c[0] === '編劇'), '一本集子每份劇本一行「編劇：某某」（6 次，已超過一般門檻）：不補成角色、不問模型：' + pm.roles.map(r => r.id));
+      // 真的有「導演」這個角色、台詞很多：照舊補成角色
+      const film = []; for (let i = 0; i < 40; i++) film.push('導演：各位準備' + i + '！', '甲：好！', '乙：知道。');
+      const pf = T.detectPrefix(mk(film), rl);
+      ok(pf.roles.some(r => r.id === '導演'), '台詞很多的「導演」角色：照舊補成角色');
+      // 模型自己列的角色不受影響
+      const pl = T.detectPrefix(mk(credits.concat(dlg)), rl.concat([{ id: '導演', name: '導演', aliases: [], gender: 'n' }]));
+      ok(pl.roles.some(r => r.id === '導演'), '模型列出的「導演」留著');
     }
     // --- 幕尾標記：就在劇本旁邊、被標成雜訊或標題 → 指示；離劇本很遠的不動；啟發式不把它當標題 ---
     {
@@ -684,6 +820,36 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     await new Promise(r => setTimeout(r, 20));      // 讓還在飛的請求跑完
     eq(events.length, failedAt, 'fatal 之後不再回報進度（否則會蓋掉錯誤畫面）');
     ok(mock.calls.format + mock.calls.label <= 3 + 3, '遇到 fatal 後不再派發新塊（共 ' + (mock.calls.format + mock.calls.label) + ' 次請求，劇本有 7 塊）');
+  }
+
+  // 前言區塊的整合測試：模型把封面、簡介、角色表、分場表標成指示／標題／台詞（最常見的錯法），管線結束後都是雜訊，場次不被污染
+  {
+    const prose = (tag, n) => Array.from({ length: n }, (_, i) => [tag + '，這是第' + i + '行介紹文字，沒有任何對白也沒有括號。', 'D', '']);
+    const dlgOf = (a, b, n, k) => { const rows = []; for (let i = 0; i < n; i++) rows.push([a + '：這是第' + k + '段第' + i + '句。', 'S', a], [b + '：好，我知道了。', 'S', b]); return rows; };
+    const rows = [].concat(
+      [['某區最佳劇本', 'D', ''], ['劇甲', 'D', ''], ['編劇 王小明 李大華', 'D', '']], prose('簡介甲', 8), [['編劇的話', 'H', '']], prose('編劇甲', 6),
+      [['角色表 分場表', 'D', ''], ['甲　開場', 'D', ''], ['乙　第一場 相遇', 'D', ''], ['丙', 'D', ''], ['第二場 離別', 'D', ''], ['丁', 'D', ''], ['結局 重逢', 'H', '']],
+      [['開場', 'H', ''], ['【燈亮。客廳。】', 'D', ''], ['第一場 相遇', 'H', ''], ['【甲坐在沙發上。】', 'D', '']], dlgOf('甲', '乙', 6, 1),
+      [['第二場 離別', 'H', ''], ['【乙走進來。】', 'D', '']], dlgOf('乙', '丙', 6, 2), [['結局 重逢', 'H', ''], ['【燈暗。】', 'D', '']], dlgOf('丁', '甲', 4, 3), [['全劇完', 'D', '']],
+      [['某區優秀劇本', 'D', ''], ['劇乙', 'D', ''], ['編劇：陳小華', 'S', '編劇']], prose('簡介乙', 5), [['編劇的話 這齣戲的靈感來自一個夏天的午後，', 'D', '']], prose('編劇乙', 5),
+      [['角色表', 'H', ''], ['父親： 許先生，許小風的父親，年輕時和魏女士談戀愛。', 'S', '父親'], ['兒子： 許小風。', 'S', '兒子'], ['母親： 高女士，魏小寶的母親。', 'S', '母親'], ['女兒： 魏小寶。', 'S', '女兒'], ['神父', 'D', '']],
+      [['第一場', 'H', ''], ['【幕起。】', 'D', '']], dlgOf('父親', '兒子', 8, 4), [['全劇完', 'D', '']]);
+    const lines = T.buildLines({ text: rows.map(r => r[0]).join('\n') }).lines;
+    eq(lines.length, rows.length, '測試資料每一行都保留');
+    const roleIds = [...new Set(rows.filter(r => r[1] === 'S').map(r => r[2]))];
+    const model = async p => p.mode === 'format' ? JSON.stringify({ roles: roleIds.map(id => ({ id, name: id, aliases: [] })), rules: { speaker_pos: 'prefix' } })
+      : p.mode === 'roles' ? '' : p.lines.map(([n]) => n + '|' + rows[n - 1][1] + '|' + (rows[n - 1][1] === 'S' ? rows[n - 1][2] : '')).join('\n');
+    const r = await T.runPipeline({ lines, callApi: model, concurrency: 1 });
+    const all = r.scenes.flatMap(sc => sc.lines);
+    eq(all.filter(l => l.s !== undefined).length, rows.filter(x => x[1] === 'S').length - 5, '台詞只少了 5 行（劇乙的署名被標成台詞 1 行＋角色表 4 列），正文一句不少');
+    eq(r.scenes.map(sc => (sc.no + ' ' + sc.name).trim()), ['第一場 相遇', '第二場 離別', '結局 重逢', '第一場'], '場次：沒有分場表造成的假場次，也沒有把分場表的項目併進場次標題（「開場」只有指示、沒有台詞，照舊併進下一場）');
+    eq(r.scenes[0].lines.find(l => l.d !== undefined), { d: '【燈亮。客廳。】' }, '開場的指示併進第一場的最前面');
+    eq(r.scenes[2].place, '', '場次地點沒有被清單污染');
+    ok(!r.roles.some(x => ['編劇', '母親', '女兒'].includes(x.id)), '署名與只出現在角色表的角色不留：' + r.roles.map(x => x.id));
+    ok(r.stats.nonScript.front >= 40 && r.stats.nonScript.list === 0, '統計：前言區塊 ' + r.stats.nonScript.front + ' 行');
+    const noise = all.filter(l => l.x !== undefined).map(l => l.x);
+    ok(['劇乙', '編劇：陳小華', '編劇的話 這齣戲的靈感來自一個夏天的午後，', '角色表', '神父'].every(t => noise.includes(t)), '劇乙的封面、標記行、署名、角色表都在雜訊裡（校正頁找得回來）；劇甲在開頭、沒有場次可掛，照舊整段捨棄');
+    ok(!noise.includes('劇甲') && !all.some(l => l.d === '劇甲' || l.d === '編劇 王小明 李大華'), '劇甲的封面不會變成指示');
   }
 
   // 前綴優先（本次真實檔案暴露的問題）：模型把「兄：…」標成續行／雜訊、把舞台指示標成台詞、編出錯的角色名與 speaker_pos。

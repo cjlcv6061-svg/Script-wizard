@@ -2038,7 +2038,9 @@ const TSP=(function(){
     let sum=0; for(const [t,c] of cnt) if(surfGet(surf,t)||c>=3) sum+=c;
     // 模型沒列出的稱呼要夠常見才補成角色（誤補會讓一般句子被強制標成台詞，比漏補嚴重）：排除偶然出現的「Well – 」「他說：」
     const minCount=Math.max(5,Math.ceil(sum*0.05));
-    const isRole=t=>surfGet(surf,t)||cnt.get(t)>=minCount||NARR_RE.test(t);
+    // 封面的「編劇：某某」不是角色（劇本集每份劇本都有一行）；真的有人叫「導演」的戲，他的台詞會多到超過 3 倍門檻，模型自己列的角色不受影響
+    const need=t=>CREDIT_SET.has(t)?minCount*3:minCount;
+    const isRole=t=>surfGet(surf,t)||cnt.get(t)>=need(t)||NARR_RE.test(t);
     let prefixLines=0; for(const l of lines){ const ts=parts(l); if(ts.length && ts.every(isRole)) prefixLines++; }
     // 前綴行要占 25% 以上才啟用；劇本只是整份文件的一部分（論文、附說明的劇本）時比例會被稀釋，
     // 所以前綴行很多（≥100 且 ≥10%）、而且全落在「已知角色或常出現的稱呼」上也算
@@ -2066,7 +2068,7 @@ const TSP=(function(){
     }
     // 候選稱呼表（交給模型判斷哪些是角色）：模型第一段沒列出、但行首出現過的稱呼（依次數排序，最多 150 個），各附一行例句
     const ex=new Map(); for(const l of lines){ const m=pfxMatch(l.text,sep); if(m) for(const t of m.toks) if(!ex.has(t)) ex.set(t,l.text); }
-    const candidates=[...cnt].filter(([t])=>!surfGet(surf,t) && !NARR_RE.test(t) && t.length<=24 && !/[|｜]/.test(t)).sort((x,y)=>y[1]-x[1]).slice(0,150).map(([t,c])=>[t,c,(ex.get(t)||'').slice(0,80)]);
+    const candidates=[...cnt].filter(([t,c])=>!surfGet(surf,t) && !NARR_RE.test(t) && t.length<=24 && !/[|｜]/.test(t) && (!CREDIT_SET.has(t) || c>=need(t))).sort((x,y)=>y[1]-x[1]).slice(0,150).map(([t,c])=>[t,c,(ex.get(t)||'').slice(0,80)]);
     return {on:true, roles:out, prefixLines, added, sep, candidates};
   }
   // 標記完成後套用：有已知前綴的行一律是台詞；沒有前綴卻被標成台詞的行改用規則標並標為待校正；
@@ -2292,6 +2294,128 @@ const TSP=(function(){
     }
     return cast;
   }
+  // ---------- 前言區塊（作者簡介、編劇的話、角色表、分場表）與場次清單 ----------
+  // 劇本集裡每份劇本的前面：封面（標籤、劇名、「編劇 某某」）→ 作者簡介 → 編劇的話 → 角色表／分場表 → 正文。
+  // 它們不是劇本，卻離兩邊的台詞很近（簡介加角色表常常不到 60 行，「遠離劇本」清不掉），模型標成指示、續行、標題或台詞都有。
+  // 起點＝封面署名行（編劇／導演＋人名；往上併入緊鄰的短行，通常是標籤與劇名）或標記行（編劇的話、角色表、分場表、目錄…）。
+  //   起點必須在第一句台詞之前、或緊接在幕尾標記（全劇完）之後：劇本中間冒出的「導演 某某」「目錄」不動。
+  // 終點（正文開始）：整行括號的舞台指示；標題（一串標題的最後一個，後面緊接內容）；或台詞（角色表之後說話者重複，
+  //   或內容像台詞：有「我／你」、驚嘆號、問號、太長）。
+  // 起點到終點之間的台詞、續行、指示、標題一律改雜訊。150 行內找不到終點就一行都不動——寧可留著，也不能吞掉劇本。
+  const FM_CAP=150;
+  const FM_CAST=['角色表','人物表','人物介紹','角色介紹','人物簡介','角色簡介','登場人物','出場人物','演員表','演員陣容'];
+  const FM_NOTE=['編劇的話','導演的話','作者的話','編導的話','創作理念','創作感言','創作歷程','編劇簡介','導演簡介','作者簡介','劇情簡介','劇目簡介','故事大綱','劇本大綱','劇情大綱','分場表','場次表','目錄','目次','前言','序言','後記','鳴謝'];
+  const FM_WORDS=new Set(FM_CAST.concat(FM_NOTE)), FM_CAST_SET=new Set(FM_CAST);
+  const FM_FUSED_RE=/^(?:編劇的話|導演的話|作者的話|編導的話|創作感言)[\s　：:﹕]+\S/;       // 標題和內文的第一行擠在同一行
+  // 標記行：整行只有標記詞（「角色表　分場表」兩欄並排、帶冒號都算）。回傳 'cast'（角色表一類）、'note'（其他）或 null
+  const fmMarker=t=>{
+    t=String(t||'').trim();
+    if(FM_FUSED_RE.test(t)) return 'note';
+    if(!t || t.length>24) return null;
+    const ws=t.split(/[\s　：:﹕]+/).filter(Boolean);
+    if(!ws.length || !ws.every(w=>FM_WORDS.has(w))) return null;
+    return ws.some(w=>FM_CAST_SET.has(w))?'cast':'note';
+  };
+  // 職掌稱呼：封面的「編劇 某某」不是台詞，也不是角色（但真的有人叫「導演」、台詞很多的戲，見 detectPrefix）
+  const CREDIT_WORDS=['編劇','導演','編導','作者','原著','改編','翻譯','譯者','監製','製作人','作曲','作詞','編曲','填詞','劇作','撰稿','統籌','策劃','顧問'];
+  const CREDIT_SET=new Set(CREDIT_WORDS);
+  const FM_CREDIT_RE=new RegExp('^(?:'+CREDIT_WORDS.join('|')+')(?:[\\s　]*[：:﹕][\\s　]*|[\\s　]+)\\S');
+  const fmCredit=t=>{ t=String(t||'').trim(); return t.length<=60 && FM_CREDIT_RE.test(t) && !/[。！？!?]/.test(t); };
+  const FM_SCENE_TOK=/第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節]/;
+  const FM_HEAD_WORD=/^(?:開場|開幕|序|序場|序幕|序章|楔子|尾聲|結局|終場|終幕|閉幕)(?:[\s　：:﹕].{0,30})?$/;
+  // 像標題的行（含「不能說　第一場　我們打京城來」這種角色表與分場表並排時被併成一行的）
+  const fmHead=(t,L)=>{ t=String(t||'').trim(); return !!t && t.length<=40 && (L==='H' || FM_SCENE_TOK.test(t) || FM_HEAD_WORD.test(t) || SCENE_NO_RE.test(t)); };
+  const fmBracket=t=>{ t=String(t||'').trim(); return t.length>=5 && /^[（(【\[].+[）)】\]]$/.test(t); };
+  // 場次標題的比對用字串：從「第N場」起、去掉空白與冒號（「Christina：第一場 手繩，畢業證書」→「第一場手繩，畢業證書」）
+  const fmKey=t=>{ t=String(t||'').trim(); const m=t.match(/第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節].*$/); return (m?m[0]:t).replace(/[\s　：:﹕]+/g,''); };
+  function trimFrontMatter(lines, labels){
+    const N=lines.length, lab=i=>(labels.get(lines[i].n)||{label:'N'}).label, txt=i=>lines[i].text.trim();
+    const who=i=>{ const m=pfxMatch(lines[i].text,null); return m?m.toks.join('/'):((labels.get(lines[i].n)||{}).role||''); };
+    const restOf=i=>{ const m=txt(i).match(/^[^：:]{1,24}[：:]\s*([\s\S]*)$/); return m?m[1]:txt(i); };
+    const isEnd=i=>i>=0 && i<N && txt(i).length<=16 && END_MARK_RE.test(txt(i));
+    let firstS=N; for(let i=0;i<N;i++){ const L=lab(i); if(L==='S' || L==='Y'){ firstS=i; break; } }
+    // 角色表裡的一列：有簡介用語；或（已經進了角色表區塊、說話者沒出現過）短短的、沒有人稱代名詞與驚嘆號問號
+    const castRow=(k,inCast,seen)=>isCastBody(txt(k)) || (inCast && !(seen && seen.has(who(k))) && restOf(k).length<=24 && !/[我你妳您他她咱俺]|[!?！？]/.test(restOf(k)));
+    // 標題後面（4 行內）緊接著正文：整行括號、不像角色表一列的台詞，或一行夠長的描述
+    const contentAfter=(j,inCast)=>{
+      for(let k=j+1;k<N && k<=j+4;k++){
+        const t=txt(k), L=lab(k);
+        if(fmBracket(t)) return true;
+        if(L==='S'){ if(!castRow(k,inCast,null)) return true; continue; }
+        if((L==='D' || L==='C') && t.length>=12 && !fmHead(t,L) && !fmMarker(t) && !/^(?:備註|註|說明|注意)/.test(t)) return true;
+      }
+      return false;
+    };
+    // 標題串：往後相隔 ≤3 行、中間都是填充行（短、不是台詞、不是括號——角色表與分場表並排時，標題之間夾著角色名）的標題
+    const filler=k=>lab(k)!=='S' && !fmBracket(txt(k)) && txt(k).length<=12;
+    const headRun=j=>{
+      const r=[j];
+      for(let k=j+1;k<N && k<=r[r.length-1]+3;k++){
+        if(fmHead(txt(k),lab(k))) r.push(k);
+        else if(!filler(k)) break;
+      }
+      return r;
+    };
+    // 從起點 i0 往後找正文開始的那一行；找不到回傳 -1
+    const findEnd=i0=>{
+      let inCast=false; const seen=new Set();
+      for(let j=i0;j<N && j<i0+FM_CAP;j++){
+        const t=txt(j), L=lab(j), mk=fmMarker(t);
+        if(mk){ inCast=mk==='cast'; continue; }
+        if(j===i0 || fmCredit(t)) continue;                  // 起點本身、連續的署名行（模型常把「編劇：某某」標成台詞）
+        if(fmBracket(t)) return j;
+        if(fmHead(t,L)){
+          const r=headRun(j);
+          if(contentAfter(r[r.length-1],inCast)) return r.length<=2?j:r[r.length-1];      // 一、兩行是（合併的）標題；三行以上是清單，最後一個才是真標題
+          j=r[r.length-1]; continue;
+        }
+        if(L==='S'){
+          if(castRow(j,inCast,seen)){ seen.add(who(j)); continue; }
+          return j;
+        }
+      }
+      return -1;
+    };
+    const starts=[]; for(let i=0;i<N;i++){ const t=txt(i); if(fmMarker(t) || fmCredit(t)) starts.push(i); }
+    let covered=0, total=0;
+    for(const i0 of starts){
+      if(i0<covered) continue;
+      let s=i0;
+      if(fmCredit(txt(i0))){
+        // 往上併入封面的標籤與劇名：緊接在幕尾標記之後就一路併到幕尾標記；否則最多併 2 個緊鄰的短行
+        let e0=-1; for(let k=s-1;k>=0 && k>=s-7;k--) if(isEnd(k)){ e0=k; break; }
+        if(e0>=0) s=e0+1;
+        else for(let k=0;k<2 && s-1>=0;k++){ const t=txt(s-1), L=lab(s-1); if(L==='S' || L==='Y' || t.length>24 || fmHead(t,L) || fmBracket(t)) break; s--; }
+      }
+      if(!(s<=firstS || isEnd(s-1) || isEnd(s-2))) continue;     // 劇本中間冒出來的不動
+      const e=findEnd(i0);
+      if(e<0) continue;
+      for(let k=s;k<e;k++){ const L=lab(k); if(L==='S' || L==='C' || L==='D' || L==='H'){ labels.set(lines[k].n,{label:'N',role:''}); total++; } }
+      covered=e;
+    }
+    return total;
+  }
+  // 場次清單（分場表、目錄）：連續 ≥3 行標題（相隔 ≤3 行），其中「第N場…」的內容在後面又出現（去空白後互相包含）→ 是清單項目，
+  // 不是場次，改雜訊；一串標題裡最後那個沒有再出現的才是真標題。不然這幾行會被併成第一場的標題，場名與地點都被污染。
+  function dedupeSceneList(lines, labels){
+    const N=lines.length, lab=i=>(labels.get(lines[i].n)||{label:'N'}).label, txt=i=>lines[i].text.trim();
+    const isHead=i=>{ const L=lab(i); return (L==='H' || L==='D' || L==='C') && fmHead(txt(i),L) && !(txt(i).length<=16 && END_MARK_RE.test(txt(i))); };
+    const filler=k=>lab(k)!=='S' && !fmBracket(txt(k)) && txt(k).length<=12;
+    const onlyFillers=(a,b)=>{ for(let k=a+1;k<b;k++) if(!filler(k)) return false; return true; };
+    const heads=[]; for(let i=0;i<N;i++) if(isHead(i)) heads.push(i);
+    let cut=0;
+    for(let h=0;h<heads.length;){
+      // 清單：標題之間只隔著填充行（角色名、頁碼之類）；真的場次標題後面都跟著內容（括號指示、台詞）
+      const run=[heads[h]];
+      for(let g=h+1;g<heads.length && heads[g]<=run[run.length-1]+3 && onlyFillers(run[run.length-1],heads[g]);g++) run.push(heads[g]);
+      h+=run.length;
+      if(run.length<3) continue;
+      const hit=run.filter(m=>{ const a=fmKey(txt(m)); return a.length>=2 && heads.some(k=>{ if(k<=m) return false; const b=fmKey(txt(k)); return b.length>=2 && (b.includes(a) || a.includes(b)); }); });
+      if(hit.length<2 || hit.length<run.length*0.6) continue;
+      for(const m of hit){ labels.set(lines[m].n,{label:'N',role:''}); cut++; }
+    }
+    return cut;
+  }
   // 幕／場結束標記（「第二幕完」「全劇完」「劇終」「THE END」）：不是場次標題（不要切出一個叫「完」的場次），
   // 也不是雜訊（它標出一幕的結束，留在劇本裡當指示）
   const END_MARK_RE=/^[\s　*＊=＝\-–—~（(【\[「『]*(?:(?:全劇|全場|本劇|本場|本幕|第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節])\s*)?(?:完結|結束|劇終|終場|落幕|完|終|END|THE END|The End|FIN)[\s　*＊=＝\-–—~）)】\]」』。.!！]*$/;
@@ -2359,6 +2483,7 @@ const TSP=(function(){
     const FAR=farOverride||NONSCRIPT_FAR;
     const lab=i=>labels.get(lines[i].n)||{label:'N'};
     const cast=trimCastTables(lines, labels);
+    const front=trimFrontMatter(lines, labels), list=dedupeSceneList(lines, labels);
     let nS=0, nQ=0;
     for(let i=0;i<lines.length;i++){ const L=lab(i); if(L.label==='S' || L.label==='Y') nS++; }
     // 幕尾標記：標成雜訊或標題、而且就在劇本旁邊的，改成指示
@@ -2371,7 +2496,7 @@ const TSP=(function(){
         if((L==='N' || L==='H') && near[i] && lines[i].text.length<=16 && END_MARK_RE.test(lines[i].text.trim())){ labels.set(lines[i].n,{label:'D',role:''}); ends++; }
       }
     }
-    if(nS<50) return {quotes:0, far:0, cast, ends};
+    if(nS<50) return {quotes:0, far:0, cast, ends, front, list};
     const QUOTE_RE=/^[^：:]{1,16}[：:]\s*[「『“"]/;
     let spoken=0; for(let i=0;i<lines.length;i++) if(lab(i).label==='S') spoken++;
     for(let i=0;i<lines.length;i++) if(lab(i).label==='S' && QUOTE_RE.test(lines[i].text)) nQ++;
@@ -2397,7 +2522,7 @@ const TSP=(function(){
       const L=lab(i).label;
       if((L==='D' || L==='C' || L==='H') && dist[i]>=FAR){ labels.set(lines[i].n,{label:'N',role:''}); farCut++; }
     }
-    return {quotes, far:farCut, cast, ends};
+    return {quotes, far:farCut, cast, ends, front, list};
   }
 
   function assemble(lines, labels, roles, opts){
@@ -2588,7 +2713,7 @@ const TSP=(function(){
     const jb=joinOpenBrackets(lines, labels, pm.on?pm.sep:null, finalRoles, dirPairs);
     const sg=detectSongs(lines, labels, finalRoles, pm.on?pm.sep:null);
     const ns=trimNonScript(lines, labels);
-    if(pm.on && (ns.quotes || ns.cast)){ const t2=tidyRoles(lines, labels, finalRoles, pm.sep); finalRoles=t2.roles; }       // 引文、人物表改雜訊後，沒有台詞的角色不留
+    if(pm.on && (ns.quotes || ns.cast || ns.front)){ const t2=tidyRoles(lines, labels, finalRoles, pm.sep); finalRoles=t2.roles; }       // 引文、人物表、前言區塊改雜訊後，沒有台詞的角色不留
     const asm=assemble(lines, labels, finalRoles, {dirPairs});
     const roles=finalRoles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
     return {roles, rules:fmt.rules, scenes:asm.scenes, labels, dirPairs,
@@ -2596,7 +2721,7 @@ const TSP=(function(){
         {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered, nonScript:ns, joinedBrackets:jb}), errors};
   }
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,numberedEdgeDrops,shapeKey,itemsToLines,detectNameColumns,detectColumnLayout,pdfItemsToPages,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,trimCastTables,joinOpenBrackets,detectDirPairs,normPunct,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,numberedEdgeDrops,shapeKey,itemsToLines,detectNameColumns,detectColumnLayout,pdfItemsToPages,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,trimCastTables,trimFrontMatter,dedupeSceneList,joinOpenBrackets,detectDirPairs,normPunct,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 
