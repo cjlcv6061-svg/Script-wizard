@@ -263,10 +263,15 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
       const emo = [['偉：我好難過 :(', 'S', '偉'], ['（轉身離開）', 'D'], ['朗：真的嗎 (', 'S', '朗'], ['（燈暗）', 'D']];
       const el = labelsOf(emo);
       eq(T.joinOpenBrackets(mkl(emo.map(r => r[0])), el, null, roles), 0, '":(" 與行尾單獨的 "(" 不當成沒關的括號');
-      // 一個打錯的括號不會吞掉後面所有的指示：最多接 6 行
+      // 括號一直沒關上（多半是打錯）不動；往後看 6 行內關上才接
       const typo = [['偉：（打錯了', 'S', '偉']].concat(Array.from({ length: 10 }, (_, i) => ['指示' + i, 'D']));
-      const tl = labelsOf(typo);
-      eq(T.joinOpenBrackets(mkl(typo.map(r => r[0])), tl, null, roles), 6, '最多接 6 行');
+      eq(T.joinOpenBrackets(mkl(typo.map(r => r[0])), labelsOf(typo), null, roles), 0, '括號一直沒關上：一行都不接');
+      const d6 = [['偉：（開始', 'S', '偉'], ['二', 'D'], ['三', 'D'], ['四', 'D'], ['五', 'D'], ['六', 'D'], ['七）', 'D'], ['（燈暗）', 'D']], d7 = d6.slice(0, 6).concat([['七', 'D'], ['八）', 'D']]);
+      eq(T.joinOpenBrackets(mkl(d6.map(r => r[0])), labelsOf(d6), null, roles), 6, '第 6 行指示關上括號：接 6 行，後面獨立的指示不動');
+      eq(T.joinOpenBrackets(mkl(d7.map(r => r[0])), labelsOf(d7), null, roles), 0, '第 7 行指示才關上：超過 6 行，不接');
+      // 中間出現別人的台詞：不接
+      const cut = [['偉：（低頭', 'S', '偉'], ['朗：什麼？', 'S', '朗'], ['看著地上）好', 'D']];
+      eq(T.joinOpenBrackets(mkl(cut.map(r => r[0])), labelsOf(cut), null, roles), 0, '括號沒關就換了說話者：不接');
     }
   }
   // 縮寫合說：「老人甲/乙：」＝老人甲＋老人乙（後面的稱呼借用第一個稱呼的開頭）

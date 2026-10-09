@@ -2107,7 +2107,8 @@ const TSP=(function(){
   // 也不是雜訊（它標出一幕的結束，留在劇本裡當指示）
   const END_MARK_RE=/^[\s　*＊=＝\-–—~（(【\[「『]*(?:(?:全劇|全場|本劇|本場|本幕|第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節])\s*)?(?:完結|結束|劇終|終場|落幕|完|終|END|THE END|The End|FIN)[\s　*＊=＝\-–—~）)】\]」』。.!！]*$/;
   // 括號折行：一句台詞裡的（指示）寫到一半換行，後面那行（常被標成舞台指示）其實還是同一句台詞。
-  // 前一行（台詞或續行）有沒關起來的括號時，緊接著的指示行改成續行，直到括號關上（最多 6 行，免得一個打錯的括號吞掉後面）。
+  // 前一行（台詞或續行）有沒關起來的括號，而且往後看 6 行內括號真的關上了 → 這幾行指示改成續行。
+  // （括號一直沒關上的多半是打錯，不動，免得吞掉後面不相干的指示。）
   // 開括號後面要緊接著字才算（「:(」這類表情符號、行尾單獨的「(」不算）
   const carryBracket=(d,t)=>{
     for(let i=0;i<t.length;i++){
@@ -2118,16 +2119,23 @@ const TSP=(function(){
     return d;
   };
   function joinOpenBrackets(lines, labels, sep, roles){
-    const surf=buildSurfaceMap(roles||[]);
-    let depth=0, chain=0, joined=0;
-    for(const l of lines){
-      const v=labels.get(l.n)||{label:'N'};
-      if(v.label==='S'){ depth=carryBracket(0,l.text); chain=0; }
-      else if(v.label==='C'){ depth=carryBracket(depth,l.text); }
-      else if(v.label==='D' && depth>0 && chain<6 && !pfxMatch(l.text,sep,surf)){
-        labels.set(l.n,{label:'C',role:''}); depth=carryBracket(depth,l.text); chain++; joined++;
-        if(!depth) chain=0;
-      }else if(v.label!=='N'){ depth=0; chain=0; }
+    const surf=buildSurfaceMap(roles||[]), lab=k=>(labels.get(lines[k].n)||{label:'N'}).label;
+    let depth=0, joined=0;
+    for(let i=0;i<lines.length;i++){
+      const L=lab(i);
+      if(L==='S') depth=carryBracket(0,lines[i].text);
+      else if(L==='C') depth=carryBracket(depth,lines[i].text);
+      else if(L==='D' && depth>0){
+        let d=depth, end=-1;
+        for(let k=i;k<lines.length && k<i+6;k++){
+          const w=lab(k);
+          if((w!=='D' && w!=='C' && w!=='N') || (w==='D' && pfxMatch(lines[k].text,sep,surf))) break;
+          d=carryBracket(d,lines[k].text);
+          if(!d){ end=k; break; }
+        }
+        if(end>=0){ for(let k=i;k<=end;k++) if(lab(k)==='D'){ labels.set(lines[k].n,{label:'C',role:''}); joined++; } i=end; }
+        depth=0;
+      }else if(L!=='N') depth=0;
     }
     return joined;
   }
