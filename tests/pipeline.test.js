@@ -287,6 +287,69 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
       eq(T.joinOpenBrackets(mkl(cut.map(r => r[0])), labelsOf(cut), null, roles), 0, '括號沒關就換了說話者：不接');
     }
   }
+  // 【】 指示括號（《粵港澳劇本創作比賽得獎劇本集》的寫法：整段指示、說話者後面的內嵌指示、換行折斷的指示都用 【】）
+  {
+    const mkl = arr => arr.map((t, i) => ({ n: i + 1, text: t }));
+    const lab = (rows) => new Map(rows.map((r, i) => [i + 1, { label: r[1], role: r[1] === 'S' ? (r[2] || r[0].split('：')[0]) : '' }]));
+    const P = ['【】'];
+    // --- stripDirections：只有偵測到的劇本才剝 【】；各種括號各自成對，不混搭；pairs 只認白名單 ---
+    eq(T.stripDirections('【一邊寫紀錄】你媽媽唔畀你去'), { t: '【一邊寫紀錄】你媽媽唔畀你去', had: false }, '沒有 pairs：【】 照舊不動（向下相容）');
+    eq(T.stripDirections('【一邊寫紀錄】你媽媽唔畀你去', P), { t: '你媽媽唔畀你去', had: true }, '偵測到 【】：開頭的指示剝掉');
+    eq(T.stripDirections('我想去 【停頓】 你呢', P), { t: '我想去你呢', had: true }, '夾在中日文字之間：連同空白一起拿掉');
+    eq(T.stripDirections('好（笑）啊【揮手】', P), { t: '好啊', had: true }, '（）與 【】 並存');
+    eq(T.stripDirections('【甲（乙）丙】丁', P), { t: '丁', had: true }, '巢狀');
+    eq(T.stripDirections('（甲】乙', P).had, false, '「（」配「】」不算一對');
+    eq(T.stripDirections('【甲）乙', P).had, false, '「【」配「）」不算一對');
+    eq(T.stripDirections('[x] 與 .* 與 【y】', ['[]', '.*', '【】']), { t: '[x] 與 .* 與', had: true }, 'pairs 只認白名單：其他的忽略，不會變成正規式');
+    // --- detectDirPairs：整行被括號包住的行裡，【】 ≥3 行且占 25% 以上 ---
+    {
+      const rowsOf = (nLent, nParen, extra = []) => [].concat(Array.from({ length: nLent }, (_, i) => ['【指示' + i + '】', 'D']), Array.from({ length: nParen }, (_, i) => ['（指示' + i + '）', 'D']), extra);
+      const det = rows => T.detectDirPairs(mkl(rows.map(r => r[0])), lab(rows));
+      eq(det(rowsOf(3, 0)), P, '3 行整行 【】：啟用');
+      eq(det(rowsOf(2, 0)), [], '只有 2 行：不啟用');
+      eq(det(rowsOf(3, 20)), [], '3 行 【】 對 20 行 （）（13%）：不啟用（多半是偶爾的標題或引用）');
+      eq(det(rowsOf(3, 9)), P, '剛好 25%：啟用');
+      eq(det(rowsOf(0, 30)), [], '沒有 【】：不啟用');
+      eq(det(rowsOf(2, 0, [['【第一場】', 'H'], ['甲：【笑】', 'S'], ['【唱】', 'Y']])), [], '標成標題／台詞／歌詞的行不算');
+      eq(det(rowsOf(3, 0).concat([['【前面】中間【後面】', 'D']])), P, '一行裡有好幾組、或不是整行包住的，不算也不擋');
+    }
+    // --- heuristicLabels：整行 【】 是指示 ---
+    eq(T.heuristicLabels(mkl(['偉：他說到最後', '【燈暗】']), roles, false).get(2).label, 'D', '啟發式：整行 【】 是指示（原本會當成續行）');
+    // --- joinOpenBrackets：認得 【】；指示自己開了括號沒關，後面標成續行的半截改回指示 ---
+    {
+      const run = (rows, pairs) => { const ls = mkl(rows.map(r => r[0])), lb = lab(rows), n = T.joinOpenBrackets(ls, lb, null, roles, pairs); return [n, rows.map((r, i) => lb.get(i + 1).label)]; };
+      eq(run([['偉：成功咗嘞！【對', 'S', '偉'], ['BB】我都話我一定畀你嚟啦！', 'D']], P), [1, ['S', 'C']], '台詞裡的 【】 折斷：後半併回台詞');
+      eq(run([['偉：成功咗嘞！【對', 'S', '偉'], ['BB】我都話我一定畀你嚟啦！', 'D']]), [0, ['S', 'D']], '沒偵測到 【】：不動');
+      eq(run([['【Mee 及明明坐下，', 'D'], ['娟想落單。】', 'C']], P), [1, ['D', 'D']], '整段指示折斷：被標成續行的後半改回指示（否則會併進上一句台詞）');
+      eq(run([['偉：你好', 'S', '偉'], ['【Mee 及明明坐下，', 'D'], ['娟想落單。】', 'C'], ['朗：嗯', 'S', '朗']], P)[1], ['S', 'D', 'D', 'S'], '夾在兩句台詞之間');
+      eq(run([['【Mee 坐下，', 'D'], ['12 頁眉', 'N'], ['起身。】', 'C']], P), [1, ['D', 'N', 'D']], '中間隔著頁眉雜訊（跨頁折斷）：照樣接，雜訊不動');
+      eq(run([['（Mee 及明明坐下，', 'D'], ['娟想落單。）', 'C']]), [1, ['D', 'D']], '（） 的整段指示折斷也一樣（不需要偵測）');
+      eq(run([['！(Kamisama ~ taihen mosh', 'D'], ['iwake arimasen deshita)', 'C']]), [0, ['D', 'C']], '這行指示不是以括號開頭（是對白裡夾著的指示，被標錯成 D）：後面的續行不動');
+      eq(run([['【打錯了', 'D'], ['說明一', 'C'], ['說明二', 'C']], P), [0, ['D', 'C', 'C']], '括號一直沒關上：不動');
+      eq(run([['【坐下', 'D'], ['偉：什麼？', 'S', '偉'], ['看一眼】', 'C']], P)[1], ['D', 'S', 'C'], '中間冒出別人的台詞：放棄');
+    }
+    // --- detectSongs：認得 【唱《歌名》】 這種提示；整行 【】 是舞台指示，不吞進歌詞 ---
+    {
+      const rows = [['不能說：【唱《帝女花》】', 'S', '不能說'], ['落花滿天蔽月光', 'C'], ['借一杯附薦鳳台上', 'C'], ['帝女花帶淚上香', 'C'], ['【眾人鼓掌】', 'D'], ['老闆娘：好聽', 'S', '老闆娘']];
+      const ls = mkl(rows.map(r => r[0])), lb = lab(rows);
+      const r = T.detectSongs(ls, lb, [{ id: '不能說', name: '不能說', aliases: [] }, { id: '老闆娘', name: '老闆娘', aliases: [] }], 'colon');
+      eq(r.songs.length, 1, '提示 【唱《帝女花》】 後面接的短行是歌詞');
+      eq(rows.map((x, i) => lb.get(i + 1).label), ['S', 'Y', 'Y', 'Y', 'D', 'S'], '三行歌詞收成歌曲；整行 【眾人鼓掌】 仍是指示');
+      const rows2 = [['（音樂再起。）', 'D'], ['一二三四五', 'C'], ['六七八九十', 'C'], ['【燈暗。】', 'D']];
+      const lb2 = lab(rows2); T.detectSongs(mkl(rows2.map(r => r[0])), lb2, [], null);
+      eq(rows2.map((x, i) => lb2.get(i + 1).label), ['D', 'Y', 'Y', 'D'], '（音樂再起）的舊寫法照舊，後面的 【燈暗。】 不被吞進歌詞');
+    }
+    // --- assemble：帶入偵測結果 ---
+    {
+      const ls = mkl(['評估員：【一邊寫紀錄】你媽媽唔畀你去', '【評估員起身離開。】', 'Mee：【對杰】唔使擔心']);
+      const lb = lab([['x', 'S', '評估員'], ['x', 'D'], ['x', 'S', 'Mee']]);
+      const rl = [{ id: '評估員', name: '評估員', aliases: [] }, { id: 'Mee', name: 'Mee', aliases: [] }];
+      const a = T.assemble(ls, lb, rl, { dirPairs: P }).scenes[0].lines;
+      eq(a[0], { s: '評估員', t: '你媽媽唔畀你去', r: '【一邊寫紀錄】你媽媽唔畀你去' }, '台詞：t 沒有 【】，r 保留原文');
+      eq(a[1], { d: '【評估員起身離開。】' }, '整行指示照舊是指示');
+      eq(T.assemble(ls, lb, rl).scenes[0].lines[0], { s: '評估員', t: '【一邊寫紀錄】你媽媽唔畀你去' }, '沒有偵測結果：照舊');
+    }
+  }
   // 縮寫合說：「老人甲/乙：」＝老人甲＋老人乙（後面的稱呼借用第一個稱呼的開頭）
   {
     const rl5 = [{ id: '老人甲', name: '老人甲', aliases: [] }, { id: '老人乙', name: '老人乙', aliases: [] }, { id: '魔老', name: '魔老', aliases: [] }];
@@ -734,6 +797,28 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     const sl = r.scenes.flatMap(s => s.lines), lastBrace = sl.find(l => l.r && /低頭看著地上的碎片/.test(l.r));
     ok(lastBrace && lastBrace.t === '我不要這樣。' && lastBrace.s === '阿燈', '組回：折行的指示從台詞拿掉、留在 r：' + JSON.stringify(lastBrace));
     ok(sl.filter(l => l.s !== undefined).length === 61, '台詞 61 句（人物表的 5 行沒有混進來）：' + sl.filter(l => l.s !== undefined).length);
+  }
+
+  // 【】 指示括號的整條管線：偵測、折行併回、剝除、結果帶出 dirPairs
+  {
+    const P = ['【】'];
+    const rows = [['第一場 心理健康評估', 'H', ''], ['【心理健康中心面診室內，Mee 半躺在梳化上。】', 'D', ''], ['【評估員起身離開。】', 'D', ''], ['【燈暗。】', 'D', '']];
+    for (let i = 0; i < 8; i++) rows.push(['評估員：第' + i + '個問題', 'S', '評估員'], ['Mee：第' + i + '個答案', 'S', 'Mee']);
+    rows.push(['Mee：成功咗嘞！【對', 'S', 'Mee'], ['BB】我都話我一定畀你嚟啦！', 'C', ''], ['評估員：【稍停】好', 'S', '評估員']);
+    const lines = T.buildLines({ text: rows.map(r => r[0]).join('\n') }).lines;
+    const model = async p => {
+      if (p.mode === 'format') return JSON.stringify({ roles: [{ id: '評估員', name: '評估員' }, { id: 'Mee', name: 'Mee' }], rules: { speaker_pos: 'prefix', direction: '【】' } });
+      if (p.mode === 'roles') return '';
+      return p.lines.map(([n]) => { const r = rows[n - 1]; const bad = r[0] === 'BB】我都話我一定畀你嚟啦！'; return n + '|' + (bad ? 'D' : r[1]) + '|' + r[2]; }).join('\n');      // 模型把折斷的後半標成指示
+    };
+    const res = await T.runPipeline({ lines, callApi: model, concurrency: 1, retryDelays: [0, 0, 0] });
+    eq(res.dirPairs, P, '管線偵測到這份劇本用 【】 寫指示');
+    const sl = res.scenes.flatMap(x => x.lines).filter(l => l.s !== undefined);
+    ok(sl.every(l => !/[【】]/.test(l.t)), '所有台詞的 t 都沒有 【】：' + sl.filter(l => /[【】]/.test(l.t)).map(l => l.t));
+    eq(sl.find(l => l.r && /對/.test(l.r)), { s: 'Mee', t: '成功咗嘞！我都話我一定畀你嚟啦！', r: '成功咗嘞！【對BB】我都話我一定畀你嚟啦！' }, '折斷的指示併回台詞後整句剝掉，r 保留含指示的原文');
+    eq(res.stats.joinedBrackets, 1, '統計：併回 1 行');
+    eq(res.scenes.flatMap(x => x.lines).filter(l => l.d !== undefined).length, 3, '三行整段指示仍是指示');
+    eq(sl.find(l => l.r && /稍停/.test(l.r)), { s: '評估員', t: '好', r: '【稍停】好' }, '說話者後面的內嵌 【稍停】 剝掉');
   }
 
   // 候選稱呼分類（真實 docx 暴露的問題）：次要角色（護士）、簡稱（楊＝楊淑華）、不是角色的標記（SD Cue）。

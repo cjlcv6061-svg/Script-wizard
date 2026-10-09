@@ -1246,14 +1246,15 @@ function normalizeScript(raw, fallbackTitle, opts){
   for(const sc of out) for(const ln of sc.lines) if(ln.s) for(const id of ln.s.split('/'))
     if(!byId.has(id)){ byId.add(id); outRoles.push({id, name:id, aliases:[], gender:'n', spoken:id}); }
 
+  const dirPairs=Array.isArray(meta.dirPairs)?meta.dirPairs.filter(p=>p==='【】'):[];       // 這份劇本用哪些括號寫指示（見 TSP.detectDirPairs）；沒有就不寫這個欄位
   return {
     schema:2,
-    meta:{
+    meta:Object.assign({
       title:str(meta.title)||str(fallbackTitle)||'未命名劇本',
       lang:str(meta.lang)||'yue',
       sourceHash:str(meta.sourceHash),
       created:str(meta.created)||new Date().toISOString()
-    },
+    }, dirPairs.length?{dirPairs}:{}),
     roles:outRoles,
     scenes:out
   };
@@ -1700,13 +1701,27 @@ const TSP=(function(){
   }
 
   // ---------- 本機規則：內嵌指示、日文標記、說話者前綴、場次標題 ----------
-  const PAREN_RE=/[（(][^（）()]*[）)]/g;
-  // 規格 4：台詞中的（…）／(…) 從 t 移除；有移除時 r 保留含指示的原文
-  function stripDirections(text){
+  // 規格 4：台詞中的（…）／(…) 從 t 移除；有移除時 r 保留含指示的原文。
+  // 指示括號：（）與 () 永遠算；其餘（目前只有 【】）要整份劇本偵測後才算（detectDirPairs，存在 meta.dirPairs），
+  // 因為 【】 在別的劇本裡可能是標題或引用，不能一律當指示剝掉。pairs 只認白名單，匯入的資料不能塞進任意正規式。
+  const DIR_PAIRS_OK=['【】'];
+  const dirRx=new Map();
+  function dirRegexes(pairs){
+    const ps=(Array.isArray(pairs)?pairs:[]).filter(p=>DIR_PAIRS_OK.includes(p));
+    const key=ps.join('|');
+    let r=dirRx.get(key);
+    if(!r){
+      const alt=['[（(][^（）()]*[）)]'].concat(ps.map(p=>p[0]+'[^'+p[0]+p[1]+']*'+p[1])).join('|');      // 各種括號各自成對，不混搭（「（甲】」不算）
+      r={between:new RegExp('(?<=['+CJK_C+'])[ \\t　]*(?:'+alt+')[ \\t　]*(?=['+CJK_C+'])','g'), paren:new RegExp('(?:'+alt+')','g')};
+      dirRx.set(key,r);
+    }
+    return r;
+  }
+  function stripDirections(text, pairs){
     let t=text, had=false, prev;
+    const rx=dirRegexes(pairs);
     // 夾在兩個中日文字之間的指示：連同兩側的空白一起拿掉，免得留下多餘空白
-    const between=new RegExp('(?<=['+CJK_C+'])[ \\t　]*[（(][^（）()]*[）)][ \\t　]*(?=['+CJK_C+'])','g');
-    do{ prev=t; t=t.replace(between,()=>{had=true; return '';}).replace(PAREN_RE,()=>{had=true; return '';}); }while(t!==prev);
+    do{ prev=t; t=t.replace(rx.between,()=>{had=true; return '';}).replace(rx.paren,()=>{had=true; return '';}); }while(t!==prev);
     if(had) t=t.replace(/[ \t　]{2,}/g,' ').trim();
     return {t, had};
   }
@@ -1818,7 +1833,7 @@ const TSP=(function(){
       if(isPageNumberLine(t,false) || /^[-–—~]\s*[0-9０-９]{1,4}\s*[-–—~]$/.test(t)){ put(L.n,'N'); continue; }
       const sp=(!sep || pfxMatch(t,sep,surf))?splitSpeakerPrefix(t,surf):null;
       if(sp){ put(L.n,'S',sp.ids.filter((x,i,ar)=>ar.indexOf(x)===i).join('/')); pending=null; continue; }
-      if(/^[（(].*[）)]$/.test(t)){ put(L.n,'D'); continue; }
+      if(/^(?:[（(].*[）)]|【.*】)$/.test(t)){ put(L.n,'D'); continue; }
       // 獨立角色名行（整行就是角色稱呼，可含分隔符）
       const toks=t.replace(/[（(][^）)]*[）)]/g,'').split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
       if(!noOwnLine && toks.length && toks.every(x=>surfGet(surf,x)) && t.length<=24){ pending=toks.map(x=>surfGet(surf,x)).filter((x,i,ar)=>ar.indexOf(x)===i).join('/'); put(L.n,'N'); continue; }
@@ -2047,7 +2062,7 @@ const TSP=(function(){
   const SONG_MAX_LINE=40;
   const songWeight=t=>{ let w=0; for(const ch of t){ if(/\s/.test(ch)) continue; w+=/[⺀-鿿豈-﫿＀-￯　-〿]/.test(ch)?1:0.5; } return w; };
   // 行尾的音樂提示：「（音樂再起。）」「(眾人唱起)」——接著的短行是歌詞
-  const SONG_CUE_END_RE=/[（(](?![^）)]*(?:完|結束|停|止))[^）)]*(?:音樂(?:再)?起|音樂響起|前奏|歌聲(?:再)?起|開始唱|唱起|接唱|齊唱|Music (?:starts|up|resumes|plays))[^）)]*[）)]\s*$/i;
+  const SONG_CUE_END_RE=/[（(【](?![^）)】]*(?:完|結束|停|止))[^）)】]*(?:音樂(?:再)?起|音樂響起|前奏|歌聲(?:再)?起|開始唱|唱起|接唱|齊唱|(?:獨|合|輪|對)?唱\s*[《〈「『]|Music (?:starts|up|resumes|plays))[^）)】]*[）)】]\s*$/i;
   const SONG_END_MARK_RE=/^\s*(?:(?:全劇完|劇終|完|終|END|The End)\s*[。.!！]?\s*$|第[一二三四五六七八九十]稿)/i;       // 劇末標記不是歌詞
   function detectSongs(lines, labels, roles, sep){
     const surf=buildSurfaceMap(roles||[]), out=[];
@@ -2059,6 +2074,7 @@ const TSP=(function(){
       const L=lab(i); if(L!=='C' && L!=='D' && L!=='N') return 0;
       const t=lines[i].text;
       if(SONG_CUE_RE.test(t) || SONG_END_MARK_RE.test(t) || isDialogue(i)) return 0;
+      if(/^\s*【[^\t]*】\s*$/.test(t)) return 0;                                         // 整行 【】＝舞台指示（這種寫法的劇本用 （） 寫歌詞回聲，不用 【】）
       if(/^\s*[（(][^\t]*[)）]\s*$/.test(t) && !SONG_TAG_RE.test(t)) return (!/[。]/.test(t) && songWeight(t)<=24 && !SONG_CUE_END_RE.test(t))?2:0;   // 整行括號＝多半是舞台指示
       if(SONG_CREDIT_RE.test(t)) return 1;                                               // 作曲／版權行可以很長
       if(songWeight(t)>SONG_MAX_LINE) return 0;
@@ -2156,36 +2172,62 @@ const TSP=(function(){
   const END_MARK_RE=/^[\s　*＊=＝\-–—~（(【\[「『]*(?:(?:全劇|全場|本劇|本場|本幕|第\s*[一二三四五六七八九十百零〇0-9]+\s*[場幕景章回節])\s*)?(?:完結|結束|劇終|終場|落幕|完|終|END|THE END|The End|FIN)[\s　*＊=＝\-–—~）)】\]」』。.!！]*$/;
   // 括號折行：一句台詞裡的（指示）寫到一半換行，後面那行（常被標成舞台指示）其實還是同一句台詞。
   // 前一行（台詞或續行）有沒關起來的括號，而且往後看 6 行內括號真的關上了 → 這幾行指示改成續行。
+  // 反過來，一行指示自己開了括號沒關，往後 6 行內才關上，中間被標成續行的半截改回指示（否則會併進上一句台詞）。
   // （括號一直沒關上的多半是打錯，不動，免得吞掉後面不相干的指示。）
   // 開括號後面要緊接著字才算（「:(」這類表情符號、行尾單獨的「(」不算）
-  const carryBracket=(d,t)=>{
+  const carryBracket=(d,t,ob,cb)=>{
     for(let i=0;i<t.length;i++){
       const ch=t[i];
-      if(ch==='（' || ch==='('){ if(i+1<t.length && !/\s/.test(t[i+1]) && !(i>0 && /[:;=]/.test(t[i-1]))) d++; }
-      else if((ch==='）' || ch===')') && d>0) d--;
+      if(ob.includes(ch)){ if(i+1<t.length && !/\s/.test(t[i+1]) && !(ch==='(' && i>0 && /[:;=]/.test(t[i-1]))) d++; }
+      else if(cb.includes(ch) && d>0) d--;
     }
     return d;
   };
-  function joinOpenBrackets(lines, labels, sep, roles){
+  function joinOpenBrackets(lines, labels, sep, roles, pairs){
     const surf=buildSurfaceMap(roles||[]), lab=k=>(labels.get(lines[k].n)||{label:'N'}).label;
+    const extra=DIR_PAIRS_OK.filter(p=>(pairs||[]).includes(p));
+    const ob='（('+extra.map(p=>p[0]).join(''), cb='）)'+extra.map(p=>p[1]).join('');
+    const carry=(d,t)=>carryBracket(d,t,ob,cb), startsNew=k=>pfxMatch(lines[k].text,sep,surf);
+    // 從第 i 行往後看 6 行，找括號關上的那一行（中途碰到台詞或帶前綴的行就放棄）；找不到回傳 -1
+    const closeAt=(i,d)=>{
+      for(let k=i;k<lines.length && k<i+6;k++){
+        const w=lab(k);
+        if((w!=='D' && w!=='C' && w!=='N') || (w==='D' && startsNew(k))) return -1;
+        d=carry(d,lines[k].text);
+        if(!d) return k;
+      }
+      return -1;
+    };
     let depth=0, joined=0;
     for(let i=0;i<lines.length;i++){
       const L=lab(i);
-      if(L==='S') depth=carryBracket(0,lines[i].text);
-      else if(L==='C') depth=carryBracket(depth,lines[i].text);
-      else if(L==='D' && depth>0){
-        let d=depth, end=-1;
-        for(let k=i;k<lines.length && k<i+6;k++){
-          const w=lab(k);
-          if((w!=='D' && w!=='C' && w!=='N') || (w==='D' && pfxMatch(lines[k].text,sep,surf))) break;
-          d=carryBracket(d,lines[k].text);
-          if(!d){ end=k; break; }
+      if(L==='S') depth=carry(0,lines[i].text);
+      else if(L==='C') depth=carry(depth,lines[i].text);
+      else if(L==='D'){
+        if(depth>0){                                           // 台詞的括號沒關：這幾行指示改成續行
+          const end=closeAt(i,depth);
+          if(end>=0){ for(let k=i;k<=end;k++) if(lab(k)==='D'){ labels.set(lines[k].n,{label:'C',role:''}); joined++; } i=end; }
+        }else{                                                 // 整段指示自己的括號沒關（這行以開括號開頭）：後面標成續行的半截改回指示
+          const d0=ob.includes(lines[i].text.trim()[0])?carry(0,lines[i].text):0, end=d0>0?closeAt(i+1,d0):-1;
+          if(end>=0){ for(let k=i+1;k<=end;k++) if(lab(k)==='C'){ labels.set(lines[k].n,{label:'D',role:''}); joined++; } i=end; }
         }
-        if(end>=0){ for(let k=i;k<=end;k++) if(lab(k)==='D'){ labels.set(lines[k].n,{label:'C',role:''}); joined++; } i=end; }
         depth=0;
       }else if(L!=='N') depth=0;
     }
     return joined;
+  }
+  // 指示括號偵測：整行被括號包住的行（不算台詞、歌詞、標題）裡，【】 的行數 ≥3 且占（）／【】合計的 25% 以上 → 這份劇本用 【】 寫指示。
+  // 回傳要加進 stripDirections／joinOpenBrackets 的括號組合（存進 meta.dirPairs，校正頁重建台詞時才一致）
+  function detectDirPairs(lines, labels){
+    let paren=0, lent=0;
+    for(const l of lines){
+      const v=labels.get(l.n), lb=v&&v.label;
+      if(lb==='S' || lb==='Y' || lb==='H') continue;
+      const t=l.text.trim();
+      if(/^[（(][^（）()]*[）)]$/.test(t)) paren++;
+      else if(/^【[^【】]*】$/.test(t)) lent++;
+    }
+    return (lent>=3 && lent>=(paren+lent)*0.25)?['【】']:[];
   }
   // farOverride：離最近台詞的行數門檻，預設 NONSCRIPT_FAR（只有 eval/nonscript-sweep.mjs 會傳別的值來量測）
   function trimNonScript(lines, labels, farOverride){
@@ -2233,8 +2275,8 @@ const TSP=(function(){
     return {quotes, far:farCut, cast, ends};
   }
 
-  function assemble(lines, labels, roles){
-    const surf=buildSurfaceMap(roles), roleIds=roles.map(r=>r.id);
+  function assemble(lines, labels, roles, opts){
+    const surf=buildSurfaceMap(roles), roleIds=roles.map(r=>r.id), dirPairs=(opts&&opts.dirPairs)||null;
     const scenes=[], stats={S:0,C:0,D:0,H:0,N:0,Y:0,orphanC:0,review:0};
     let cur=null, lastS=null;
     const songItems=new Map();
@@ -2280,7 +2322,7 @@ const TSP=(function(){
         if(it.k==='Y'){ if(it.lyrics.length) ls.push({song:normPunct(it.title), lyrics:it.lyrics.map(normPunct)}); continue; }
         if(it.k==='D'){ const o={d:normPunct(it.text)}; if(it.rv) o.rv=true; ls.push(o); continue; }
         const full=(it.dir?it.dir:'')+it.text;                 // 前綴上的指示放回最前面
-        const sd=stripDirections(full);
+        const sd=stripDirections(full, dirPairs);
         if(!sd.t){ ls.push(Object.assign({d:(it.pre||'')+full}, it.rv?{rv:true}:{})); continue; }   // 保留說話者前綴，不丟資訊   // 只剩指示 → 當舞台指示
         const o={s:it.s, t:markJapanese(normPunct(sd.t))};
         if(sd.had) o.r=full;
@@ -2417,18 +2459,19 @@ const TSP=(function(){
       pfx=applyPrefix(lines, labels, fmt.roles, pm.sep);
       const t=tidyRoles(lines, labels, fmt.roles, pm.sep); finalRoles=t.roles; pfx.dropped=t.dropped; pfx.renamed=t.renamed;
     }
-    const jb=joinOpenBrackets(lines, labels, pm.on?pm.sep:null, finalRoles);
+    const dirPairs=detectDirPairs(lines, labels);
+    const jb=joinOpenBrackets(lines, labels, pm.on?pm.sep:null, finalRoles, dirPairs);
     const sg=detectSongs(lines, labels, finalRoles, pm.on?pm.sep:null);
     const ns=trimNonScript(lines, labels);
     if(pm.on && (ns.quotes || ns.cast)){ const t2=tidyRoles(lines, labels, finalRoles, pm.sep); finalRoles=t2.roles; }       // 引文、人物表改雜訊後，沒有台詞的角色不留
-    const asm=assemble(lines, labels, finalRoles);
+    const asm=assemble(lines, labels, finalRoles, {dirPairs});
     const roles=finalRoles.map(r=>({id:r.id, name:r.name, aliases:r.aliases, gender:r.gender, spoken:r.id}));
-    return {roles, rules:fmt.rules, scenes:asm.scenes, labels,
+    return {roles, rules:fmt.rules, scenes:asm.scenes, labels, dirPairs,
       stats:Object.assign({chunks:chunks.length, failedChunks:failed.length, failedChunkNos:failed.sort((a,b)=>a-b), partialChunkNos:partial.sort((a,b)=>a-b), partialLines, retried, lines:lines.length}, asm.stats,
         {prefix:pm.on?Object.assign({lines:pm.prefixLines, added:pm.added, sep:pm.sep}, pfx):null, roleClassify, songs:sg.songs.length, songLines:sg.covered, nonScript:ns, joinedBrackets:jb}), errors};
   }
 
-  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,numberedEdgeDrops,shapeKey,itemsToLines,detectNameColumns,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,trimCastTables,joinOpenBrackets,normPunct,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
+  return {MAX_LINES,isPageNumberLine,sequentialPageNumberIdx,numberedEdgeDrops,shapeKey,itemsToLines,detectNameColumns,chunkLines,sampleForFormat,parseFormat,buildSurfaceMap,parseLabels,validateLabels,stripDirections,markJapanese,splitSpeakerPrefix,parseHeading,heuristicLabels,detectPrefix,applyPrefix,adoptRoles,tidyRoles,detectSongs,trimNonScript,trimCastTables,joinOpenBrackets,detectDirPairs,normPunct,checkLabels,parseRoleVerdicts,applyRoleVerdicts,assemble,runPipeline,cleanPdfPages,looksScanned,residualPageNumbers,textToLines,pagesToLines,buildLines,toWire};
 })();
 /* PARSER-CORE:END */
 
@@ -2446,7 +2489,8 @@ const TSE=(function(){
 
   // 由種類／角色／文字建出一行。S 的文字依規格 4 重新拆成 t（去指示）與 r（含指示原文）；
   // 台詞只剩指示時自動轉成指示行。使用者在文字裡自己加的 ⟦…⟧ 會保留。
-  function makeLine(kind, roles, text){
+  const pairsOf=data=>data && data.meta && Array.isArray(data.meta.dirPairs)?data.meta.dirPairs:null;
+  function makeLine(kind, roles, text, pairs){
     text=String(text==null?'':text);
     if(kind==='D') return {d:TSP.normPunct(stripMarks(text))};
     if(kind==='X') return {x:stripMarks(text)};
@@ -2456,7 +2500,7 @@ const TSE=(function(){
       return {song:'', lyrics:ly};
     }
     if(!roles || !roles.length) throw new Error('台詞需要指定角色');
-    const sd=TSP.stripDirections(text);
+    const sd=TSP.stripDirections(text, pairs);
     if(!sd.t.trim()) return {d:TSP.normPunct(stripMarks(text))};
     const tt=TSP.normPunct(sd.t);
     const o={s:roles.join('/'), t:tt.indexOf('⟦')>=0?tt:TSP.markJapanese(tt)};
@@ -2468,7 +2512,7 @@ const TSE=(function(){
 
   function setLine(data,si,li,kind,roles,text){
     const sc=data.scenes[si];
-    const nl=makeLine(kind,roles,text);
+    const nl=makeLine(kind,roles,text,pairsOf(data));
     sc.lines[li]=nl;
     return nl;
   }
@@ -2482,7 +2526,7 @@ const TSE=(function(){
     const ta=fullText(a), tb=fullText(b);
     let merged;
     if(a.d!==undefined) merged={d:stripMarks(joinText(ta,tb))};
-    else merged=makeLine('S',rolesOf(a),joinText(ta,tb));   // 前一行是台詞：後一行當續行併入
+    else merged=makeLine('S',rolesOf(a),joinText(ta,tb),pairsOf(data));   // 前一行是台詞：後一行當續行併入
     ls[j]=merged;
     ls.splice(li,1);
     return j;
@@ -2493,7 +2537,7 @@ const TSE=(function(){
     if(!(pos>0 && pos<text.length)) throw new Error('請把游標放在要拆開的位置');
     const a=text.slice(0,pos).replace(/\s+$/,''), b=text.slice(pos).replace(/^\s+/,'');
     if(!a || !b) throw new Error('請把游標放在要拆開的位置');
-    data.scenes[si].lines.splice(li,1,makeLine(kind,roles,a),makeLine(kind,roles,b));
+    data.scenes[si].lines.splice(li,1,makeLine(kind,roles,a,pairsOf(data)),makeLine(kind,roles,b,pairsOf(data)));
     return li+1;
   }
   function splitLine(data,si,li,pos){
@@ -4330,12 +4374,12 @@ async function runParse(){
         }
       });
       // 解析結果只放在本機，供相同內容重用；不含 Worker 以外的任何資料
-      const slim={roles:result.roles, rules:result.rules, scenes:result.scenes, stats:result.stats};
+      const slim={roles:result.roles, rules:result.rules, scenes:result.scenes, stats:result.stats, dirPairs:result.dirPairs};
       try{ await Store.put('parseCache',{hash:src.hash, result:slim, createdAt:Date.now()}); }catch(e){}
       result=slim;
     }
     setParseUI({stage:'整理劇本…',pct:99,cancel:false});
-    const data=normalizeScript({schema:2, meta:{title, lang:'yue', sourceHash:src.hash, created:new Date().toISOString()}, roles:result.roles, scenes:result.scenes}, title, {keepNoise:true});
+    const data=normalizeScript({schema:2, meta:{title, lang:'yue', sourceHash:src.hash, created:new Date().toISOString(), dirPairs:result.dirPairs}, roles:result.roles, scenes:result.scenes}, title, {keepNoise:true});
     const now=Date.now();
     const rec={id:newScriptId(), title, hash:src.hash, data, createdAt:now, updatedAt:now, lastRole:'', parse:{failedChunks:result.stats.failedChunks||0, review:result.stats.review||0, cached}};
     await Store.put('scripts',rec);
