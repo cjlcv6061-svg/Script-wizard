@@ -140,6 +140,20 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(got(33).label === 'N', '句子裡的逗號不是合說：「無人需要我留低，好自由，…：」不被當前綴');
     ok([28, 29, 30, 31, 32].every(n => !got(n).rv), '這幾行是確定的，不標待校正');
   }
+  // 劇本只是整份文件的一部分（論文）：前綴行占比被稀釋（<25%），但很多（≥100 且 ≥10%）且集中在已知角色上，也啟用前綴規則
+  {
+    const rl6 = [{ id: '阿宏', name: '阿宏', aliases: [] }, { id: '阿燈', name: '阿燈', aliases: [] }];
+    const doc = []; for (let i = 0; i < 150; i++) doc.push('阿宏：句' + i, '阿燈：回' + i);
+    for (let i = 0; i < 900; i++) doc.push('這是論文的說明文字第' + i + '行，沒有說話者。');
+    ok(T.detectPrefix(mk(doc), rl6).on, '300 行前綴／1200 行（25%）：啟用');
+    const diluted = doc.concat(Array.from({ length: 1300 }, (_, i) => '論文說明文字續' + i + '，沒有說話者。'));
+    ok(T.detectPrefix(mk(diluted), rl6).on, '300 行前綴／2500 行（12%，≥100 且 ≥10%）：啟用');
+    const tooDiluted = doc.concat(Array.from({ length: 4000 }, (_, i) => '論文說明文字續' + i + '，沒有說話者。'));
+    ok(!T.detectPrefix(mk(tooDiluted), rl6).on, '300 行前綴／5200 行（<10%）：不啟用');
+    const fewPrefix = []; for (let i = 0; i < 40; i++) fewPrefix.push('阿宏：句' + i, '阿燈：回' + i);
+    for (let i = 0; i < 400; i++) fewPrefix.push('說明文字第' + i + '行，沒有說話者。');
+    ok(!T.detectPrefix(mk(fewPrefix), rl6).on, '只有 80 行前綴（<100）：不因寬鬆規則啟用');
+  }
   // 縮寫合說：「老人甲/乙：」＝老人甲＋老人乙（後面的稱呼借用第一個稱呼的開頭）
   {
     const rl5 = [{ id: '老人甲', name: '老人甲', aliases: [] }, { id: '老人乙', name: '老人乙', aliases: [] }, { id: '魔老', name: '魔老', aliases: [] }];

@@ -1836,7 +1836,9 @@ const TSP=(function(){
     const minCount=Math.max(5,Math.ceil(sum*0.05));
     const isRole=t=>surfGet(surf,t)||cnt.get(t)>=minCount||NARR_RE.test(t);
     let prefixLines=0; for(const l of lines){ const ts=parts(l); if(ts.length && ts.every(isRole)) prefixLines++; }
-    if(prefixLines<Math.max(10,Math.ceil(body*0.25))) return {on:false, prefixLines};
+    // 前綴行要占 25% 以上才啟用；劇本只是整份文件的一部分（論文、附說明的劇本）時比例會被稀釋，
+    // 所以前綴行很多（≥100 且 ≥10%）、而且全落在「已知角色或常出現的稱呼」上也算
+    if(prefixLines<Math.max(10,Math.ceil(body*0.25)) && !(prefixLines>=100 && prefixLines>=body*0.1)) return {on:false, prefixLines};
     const toks=[...cnt].filter(([t])=>isRole(t));
     const out=roles.map(r=>Object.assign({},r,{aliases:(r.aliases||[]).slice()})), added=[];
     // 模型的 id 在文字裡沒有任何依據，但它的名稱／別名正是行首前綴（例：id「眉」、別名「妹」，文字寫「妹：」），
