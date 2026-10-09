@@ -23,7 +23,30 @@ eq(TSE.makeLine('S', ['偉'], '我係⟦あ⟧人'), { s: '偉', t: '我係⟦�
 eq(TSE.makeLine('S', ['偉'], '（笑）⟦はい⟧'), { s: '偉', t: '⟦はい⟧', r: '（笑）はい' }, 'r 不含標記');
 eq(TSE.makeLine('D', [], '⟦x⟧（燈亮）'), { d: 'x（燈亮）' }, '指示不留標記');
 eq(TSE.makeLine('X', [], '- 3 -'), { x: '- 3 -' }, '雜訊');
+eq(TSE.makeLine('S', ['偉'], '好耐無見\u22EF\u22EF你好嗎'), { s: '偉', t: '好耐無見……你好嗎' }, '中線省略號 ⋯ 正規化成 …（朗讀與比對的標點表只認 …）');
+eq(TSE.makeLine('S', ['偉'], '（笑）好耐無見\u22EF\u22EF'), { s: '偉', t: '好耐無見……', r: '（笑）好耐無見\u22EF\u22EF' }, 'r 保留原文的 ⋯');
+eq(TSE.makeLine('D', [], '燈暗\u22EF\u22EF'), { d: '燈暗……' }, '指示也正規化');
+eq(TSE.makeLine('Y', null, '唱到\u22EF\u22EF\n再唱').lyrics, ['唱到……', '再唱'], '歌詞也正規化');
+eq(TSE.makeLine('X', [], '\u22EF'), { x: '\u22EF' }, '雜訊保留原樣');
 assert.throws(() => TSE.makeLine('S', [], '甲'), /角色/); n++;
+// 【】 指示括號：劇本的 meta.dirPairs 有 '【】'，校正頁重建台詞時才剝掉（和組回時一致）；沒有就照舊
+{
+  const mkd = pairs => ({ schema: 2, meta: Object.assign({ title: 't' }, pairs ? { dirPairs: pairs } : {}), roles: [], scenes: [{ no: '全劇', name: '', season: '', place: '', lines: [{ s: '偉', t: '好', r: '【笑】好' }, { s: '偉', t: '嘅' }] }] });
+  eq(TSE.makeLine('S', ['偉'], '【笑】你好【揮手】', ['【】']), { s: '偉', t: '你好', r: '【笑】你好【揮手】' }, 'makeLine 帶 pairs：剝掉 【】');
+  eq(TSE.makeLine('S', ['偉'], '【笑】你好'), { s: '偉', t: '【笑】你好' }, '沒有 pairs：照舊');
+  eq(TSE.makeLine('S', ['偉'], '【沉默】', ['【】']), { d: '【沉默】' }, '只剩指示 → 轉成指示行');
+  const d = mkd(['【】']);
+  TSE.setLine(d, 0, 1, 'S', ['偉'], '【嘆氣】嘅');
+  eq(d.scenes[0].lines[1], { s: '偉', t: '嘅', r: '【嘆氣】嘅' }, 'setLine 讀 data.meta.dirPairs');
+  TSE.mergePrev(d, 0, 1);
+  eq(d.scenes[0].lines[0], { s: '偉', t: '好嘅', r: '【笑】好【嘆氣】嘅' }, 'mergePrev：合併後兩邊的 【】 都剝掉');
+  const e = mkd(['【】']);
+  TSE.splitAt(e, 0, 0, 'S', ['偉'], '【笑】好呀，你呢', 6);
+  eq(e.scenes[0].lines.slice(0, 2), [{ s: '偉', t: '好呀，', r: '【笑】好呀，' }, { s: '偉', t: '你呢' }], 'splitAt：拆開後各自剝掉 【】');
+  const f = mkd(null);
+  TSE.setLine(f, 0, 1, 'S', ['偉'], '【嘆氣】嘅');
+  eq(f.scenes[0].lines[1], { s: '偉', t: '【嘆氣】嘅' }, '沒有 meta.dirPairs：照舊');
+}
 {
   const d = mk();
   TSE.setLine(d, 0, 3, 'S', ['朗'], '（燈暗）後話');

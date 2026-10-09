@@ -23,6 +23,27 @@ const ok = (c, m) => { assert(c, m); pass++; };
 (async () => {
   const idb = new IDBFactory();
 
+  // ---- 0. 粵拼字典：口語句末助詞「㗎」（gaa3）要在字典裡，同音判斷才認得它和「架」是同音 ----
+  {
+    const { w: w0 } = await boot(new IDBFactory());
+    ok(ev(w0, 'sameSound("㗎","架")') === true && ev(w0, 'sameSound("㗎","嘅")') === false, '「㗎」與「架」同音、與「嘅」不同音');
+    ok(ev(w0, 'sameSound("黎","嚟")') === true, '原本的同音判斷不變');
+  }
+
+  // ---- 0b. meta.dirPairs（這份劇本用 【】 寫指示）：保存、白名單、沒有就不寫 ----
+  {
+    const { w: w1 } = await boot(new IDBFactory());
+    const mkRaw = meta => ({ schema: 2, meta, roles: [], scenes: [{ no: '全劇', lines: [{ s: '甲', t: '好' }] }] });
+    const a = ev(w1, 'normalizeScript(' + JSON.stringify(mkRaw({ title: 'x', dirPairs: ['【】', '[]', '.*', 5] })) + ')');
+    ok(JSON.stringify(a.meta.dirPairs) === '["【】"]', 'dirPairs 只留白名單內的括號：' + JSON.stringify(a.meta.dirPairs));
+    const b = ev(w1, 'normalizeScript(' + JSON.stringify(mkRaw({ title: 'x' })) + ')');
+    ok(!('dirPairs' in b.meta), '沒有偵測到就不寫這個欄位（既有劇本的格式不變）');
+    const c = ev(w1, 'normalizeScript(' + JSON.stringify(mkRaw({ title: 'x', dirPairs: '【】' })) + ')');
+    ok(!('dirPairs' in c.meta), '不是陣列：忽略');
+    const d = ev(w1, 'normalizeScript(' + JSON.stringify(a) + ')');
+    ok(JSON.stringify(d.meta.dirPairs) === '["【】"]', '匯出再匯入（再正規化一次）後仍在');
+  }
+
   // ---- 1. 空首頁 ----
   let { w } = await boot(idb);
   ok(w.document.querySelector('.home-empty'), '空首頁顯示提示');

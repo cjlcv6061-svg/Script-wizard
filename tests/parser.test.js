@@ -80,6 +80,50 @@ function makePages(np, bodyPerPage, header, footer) {
   ok(r.removed.length === 12, '頁眉＋英文頁尾');
 }
 
+// ---- 帶頁碼的頁眉頁尾：頁碼 ＝ 頁序 ＋ 常數（劇本合集每份劇本各有自己的偶數頁頁眉，每種只出現約 10 次）----
+{
+  const body = (p, n = 8) => Array.from({ length: n }, (_, i) => '台詞' + p + '號第' + String.fromCharCode(0x4e00 + p) + String.fromCharCode(0x4e00 + i * 3) + '行內容');
+  const bodyOf = pages => pages.flat().filter(l => l.startsWith('台詞'));
+  // (1) 合集：偶數頁頂端「頁碼 編劇 《劇名》」（兩份劇本，各 ~10 次），奇數頁底端「頁碼 劇本創作比賽 得獎劇本集」
+  {
+    const head = p => p + (p < 22 ? ' 甲編劇 《甲劇》' : ' 乙編劇 《乙劇》');
+    const pages = []; for (let p = 1; p <= 40; p++) pages.push(p % 2 ? body(p).concat([p + ' 劇本創作比賽 得獎劇本集']) : [head(p)].concat(body(p)));
+    const r = T.cleanPdfPages(pages);
+    const hdr = r.removed.filter(x => x.reason === 'pageno-hdr');
+    eq(hdr.length, 20, '20 個偶數頁頁眉（兩種形狀、各 10 頁）都被移除，原因 pageno-hdr');
+    ok(hdr.every(x => /《[甲乙]劇》/.test(x.text)), '移除的都是頁眉');
+    eq(r.pages.flat().length, 40 * 8, '剩下的只有內文（奇數頁頁尾由原本的重複規則移除）');
+    eq(bodyOf(r.pages).length, 40 * 8, '內文一行不少');
+    eq(T.numberedEdgeDrops(pages.map(p => p.slice()), 3).size > 0, true, 'numberedEdgeDrops 單獨呼叫也找得到');
+  }
+  // (2) 頁碼從頭重編：兩段各自成立
+  {
+    const pages = []; for (let p = 1; p <= 20; p++) pages.push([((p - 1) % 10 + 1) + ' 紅樓夢 草稿'].concat(body(p)));
+    const r = T.cleanPdfPages(pages);
+    eq(r.removed.length, 20, '頁碼在第 11 頁重編為 1：兩段（各 10 頁）都成立');
+  }
+  // (3) 英文「N | Title」
+  {
+    const pages = []; for (let p = 1; p <= 12; p++) pages.push(body(p).concat([p + ' | The Glass Menagerie']));
+    eq(T.cleanPdfPages(pages).removed.length, 12, '英文「N | Title」');
+  }
+  // (4) 不能誤刪：場次號循環、含數字的台詞、一頁一場「第N場」、頁碼不連續、只有 2 頁吻合
+  {
+    const cyc = []; for (let p = 1; p <= 30; p++) cyc.push(['第' + (p % 7 + 1) + '場 重複出現的標題'].concat(body(p)));
+    eq(T.numberedEdgeDrops(cyc, 3).size, 0, '場次標題（第N場）不當頁眉');
+    const dlg = []; for (let p = 1; p <= 30; p++) dlg.push(['阿明：我要去' + (p % 3 + 1) + '號房'].concat(body(p)));
+    eq(T.numberedEdgeDrops(dlg, 3).size, 0, '含數字的台詞不當頁眉');
+    const scn = []; for (let p = 1; p <= 30; p++) scn.push(['第' + p + '場'].concat(body(p)));
+    eq(T.numberedEdgeDrops(scn, 3).size, 0, '一頁一場、場次號剛好等於頁序：不刪');
+    const rnd = []; for (let p = 1; p <= 30; p++) rnd.push([((p * 7) % 11 + 1) + ' 附註'].concat(body(p)));
+    eq(T.numberedEdgeDrops(rnd, 3).size, 0, '數字與頁序無關：不刪');
+    const two = []; for (let p = 1; p <= 30; p++) two.push((p <= 2 ? [p + ' 草稿'] : [(p * 5 % 9 + 20) + ' 草稿']).concat(body(p)));
+    eq(T.numberedEdgeDrops(two, 3).size, 0, '只有 2 頁吻合（<3）：不刪');
+    const mid = []; for (let p = 1; p <= 30; p++) mid.push(body(p, 5).concat(['內文裡有 ' + p + ' 個字的行']).concat(body(p, 5)));
+    eq(T.numberedEdgeDrops(mid, 3).size, 0, '數字在行中間、不在邊緣：不刪');
+  }
+}
+
 // ---- itemsToLines ----
 {
   const it = (str, x, y, w, fs = 11) => ({ str, transform: [fs, 0, 0, fs, x, y], width: w });
