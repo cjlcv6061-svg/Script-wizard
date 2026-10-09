@@ -1679,7 +1679,13 @@ const TSP=(function(){
       let dirs='';
       const name=m[1].replace(/[（(][^）)]*[）)]/g,d=>{ dirs+=d; return ''; }).trim();
       const toks=name.split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
-      if(toks.length && toks.every(x=>surfGet(surf,x))) return {rest:text.slice(m[0].length), pre:m[0], dir:dirs, ids:toks.map(x=>surfGet(surf,x))};
+      // 縮寫合說：「老人乙/丙：」＝老人乙＋老人丙。後面不認得的稱呼借用第一個稱呼的開頭再找一次
+      const ids=toks.map((x,i)=>{
+        let id=surfGet(surf,x); if(id || i===0 || x.length>2) return id;
+        for(let k=toks[0].length-1;k>=1 && !id;k--) id=surfGet(surf,toks[0].slice(0,k)+x);
+        return id;
+      });
+      if(toks.length && ids.every(Boolean)) return {rest:text.slice(m[0].length), pre:m[0], dir:dirs, ids};
     }
     return null;
   }
@@ -1944,20 +1950,38 @@ const TSP=(function(){
   const SONG_CUE_RE=/^\s*(?:SD|SL|SR|LX|FX|VO|Cue)\b/i;
   const SONG_CREDIT_RE=/^\s*(?:曲|詞|作曲|作詞|編曲|粵語新詞|英語詞|原曲|Music|Lyrics|©)\s*[﹕:：]?/i;
   const SONG_MAX_LINE=40;
+  const songWeight=t=>{ let w=0; for(const ch of t){ if(/\s/.test(ch)) continue; w+=/[⺀-鿿豈-﫿＀-￯　-〿]/.test(ch)?1:0.5; } return w; };
+  // 行尾的音樂提示：「（音樂再起。）」「(眾人唱起)」——接著的短行是歌詞
+  const SONG_CUE_END_RE=/[（(](?![^）)]*(?:完|結束|停|止))[^）)]*(?:音樂(?:再)?起|音樂響起|前奏|歌聲(?:再)?起|開始唱|唱起|接唱|齊唱|Music (?:starts|up|resumes|plays))[^）)]*[）)]\s*$/i;
+  const SONG_END_MARK_RE=/^\s*(?:(?:全劇完|劇終|完|終|END|The End)\s*[。.!！]?\s*$|第[一二三四五六七八九十]稿)/i;       // 劇末標記不是歌詞
   function detectSongs(lines, labels, roles, sep){
     const surf=buildSurfaceMap(roles||[]), out=[];
     const lab=i=>(labels.get(lines[i].n)||{}).label;
     const isDialogue=i=>{ const m=pfxMatch(lines[i].text, sep||null, surf); return !!(m && m.toks.every(t=>surfGet(surf,t))); };
     const squash=t=>t.replace(/[\t　]+/g,'　').trim();
-    const absorbable=(i,dir)=>{
-      const L=lab(i); if(L!=='C' && L!=='D' && L!=='N') return false;
+    // 回傳 0＝不吸、1＝吸、2＝整行括號但很像歌詞的回聲（短、沒有句號）：只有前後都是歌詞時才吸
+    const absorbCode=(i,dir)=>{
+      const L=lab(i); if(L!=='C' && L!=='D' && L!=='N') return 0;
       const t=lines[i].text;
-      if(SONG_CUE_RE.test(t) || isDialogue(i)) return false;
-      if(/^\s*[（(][^\t]*[)）]\s*$/.test(t) && !SONG_TAG_RE.test(t)) return false;       // 整行括號＝舞台指示
-      if(SONG_CREDIT_RE.test(t)) return true;                                            // 作曲／版權行可以很長
-      if(t.replace(/\s+/g,'').length>SONG_MAX_LINE) return false;
-      if(L==='C' && dir<0 && i>0 && lab(i-1)==='S') return false;                        // 這行是前一句台詞的續行
-      return t.replace(/\s+/g,'').length>=2 || SONG_TAG_RE.test(t);
+      if(SONG_CUE_RE.test(t) || SONG_END_MARK_RE.test(t) || isDialogue(i)) return 0;
+      if(/^\s*[（(][^\t]*[)）]\s*$/.test(t) && !SONG_TAG_RE.test(t)) return (!/[。]/.test(t) && songWeight(t)<=24 && !SONG_CUE_END_RE.test(t))?2:0;   // 整行括號＝多半是舞台指示
+      if(SONG_CREDIT_RE.test(t)) return 1;                                               // 作曲／版權行可以很長
+      if(songWeight(t)>SONG_MAX_LINE) return 0;
+      if((t.match(/[A-Za-z]/g)||[]).length>(t.match(/[⺀-鿿]/g)||[]).length && (t.match(/[,，、]/g)||[]).length>=3) return 0;    // 英文人名列表（演員表）不是歌詞
+      if(L==='C' && dir<0 && i>0 && lab(i-1)==='S') return 0;                            // 這行是前一句台詞的續行
+      return (t.replace(/\s+/g,'').length>=2 || SONG_TAG_RE.test(t))?1:0;
+    };
+    const absorbable=(i,dir)=>absorbCode(i,dir)===1;
+    // 往後延伸：括號回聲行（2）後面還接著歌詞（1）就連同吸進去
+    const extend=(from,max)=>{
+      let b=from;
+      while(b+1<lines.length && !taken[b+1] && b-from<max){
+        const c=absorbCode(b+1,+1);
+        if(c===1) b++;
+        else if(c===2 && b+2<lines.length && !taken[b+2] && absorbCode(b+2,+1)===1) b+=2;
+        else break;
+      }
+      return b;
     };
     const taken=new Uint8Array(lines.length), blocks=[];
     for(let i=0;i<lines.length;i++){
@@ -1968,11 +1992,20 @@ const TSP=(function(){
       if(!seedTag && !seedTitle) continue;
       let a=i, b=i;
       while(a>0 && !taken[a-1] && i-a<60 && absorbable(a-1,-1)) a--;
-      while(b+1<lines.length && !taken[b+1] && b-i<80 && absorbable(b+1,+1)) b++;
+      b=extend(i,80);
       if(!seedTag && b===i) continue;                       // 只有標題、後面沒有歌詞
       for(let k=a;k<=b;k++) taken[k]=1;
       blocks.push({a,b});
     }
+    // 第二輪：沒有歌手標記也沒有標題的歌詞——前一行（台詞或指示）以音樂提示結尾，接著至少兩行連續的短行
+    for(let i=0;i<lines.length-2;i++){
+      if(taken[i] || !SONG_CUE_END_RE.test(lines[i].text) || lab(i)==='H') continue;
+      const b=extend(i,80);
+      if(b-i<2) continue;
+      for(let k=i+1;k<=b;k++) taken[k]=1;
+      blocks.push({a:i+1,b});
+    }
+    blocks.sort((x,y)=>x.a-y.a);
     let covered=0; for(const bk of blocks) covered+=bk.b-bk.a+1;
     if(covered>lines.length*0.5) return {songs:[], covered:0};         // 一半以上都是歌？多半是誤判，整批放棄
     blocks.forEach((bk,id)=>{

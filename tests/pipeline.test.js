@@ -140,6 +140,16 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     ok(got(33).label === 'N', '句子裡的逗號不是合說：「無人需要我留低，好自由，…：」不被當前綴');
     ok([28, 29, 30, 31, 32].every(n => !got(n).rv), '這幾行是確定的，不標待校正');
   }
+  // 縮寫合說：「老人甲/乙：」＝老人甲＋老人乙（後面的稱呼借用第一個稱呼的開頭）
+  {
+    const rl5 = [{ id: '老人甲', name: '老人甲', aliases: [] }, { id: '老人乙', name: '老人乙', aliases: [] }, { id: '魔老', name: '魔老', aliases: [] }];
+    const body = []; for (let i = 0; i < 14; i++) body.push('老人甲：句' + i, '魔老：回' + i);
+    body.push('老人甲/乙：咪係！', '老人甲/丁：冇呢個人');
+    const ls = mk(body), pf = T.detectPrefix(ls, rl5), lab = new Map(ls.map(l => [l.n, { label: 'N', role: '' }]));
+    T.applyPrefix(ls, lab, pf.roles, pf.sep);
+    eq([lab.get(ls[28].n).label, lab.get(ls[28].n).role], ['S', '老人甲/老人乙'], '「老人甲/乙：」縮寫合說');
+    ok(lab.get(ls[29].n).label !== 'S' || lab.get(ls[29].n).rv, '「老人甲/丁」找不到「老人丁」：不當成確定的台詞');
+  }
   // 破折號貼著字的寫法（「Madison- So?」「Alexandre –I don't」）：稱呼是已知角色、破折號至少一邊有空白
   {
     const rl4 = [{ id: 'Madison', name: 'Madison', aliases: [] }, { id: 'Alexandre', name: 'Alexandre', aliases: [] }];
@@ -643,6 +653,27 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     eq(r.stats.songs, 2, 'stats.songs');
     eq(r.stats.review, 0, '歌曲區塊不產生待校正行');
     ok(L.some(l => l.d === '（音樂起。）') && L.some(l => l.d === '（音樂完。）'), '整行括號的舞台指示留在原處，不被吸進歌詞');
+  }
+  // 沒有歌手標記、沒有標題的歌詞：前一行以音樂提示結尾，接著連續的短行；括號回聲行夾在歌詞中間也算；英文長歌詞行；演員名單與劇末標記不算
+  {
+    const g = [];
+    for (let i = 0; i < 14; i++) g.push('甲：第' + i + '句話。', '乙：我知道呀。');
+    g.push('乙：我哋一齊唱啦。（音樂再起。）', '來吧一齊唱', '讓歌聲飛翔', '（輕輕和唱）', '終必飛到天邊外', 'Jingle Bells Jingle Bells, jingle with the sleigh', 'Rachael, Kit, Tim, Moshan, Vivian, Judy, John, Billy, Brian', '全劇完');
+    g.push('甲：好聽。', '（燈暗。）', '乙：收工。');
+    const lines = T.buildLines({ text: g.join('\n') }).lines;
+    const callApi = async p => {
+      if (p.mode === 'format') return JSON.stringify({ roles: [{ id: '甲', name: '甲' }, { id: '乙', name: '乙' }], rules: { speaker_pos: 'prefix' } });
+      if (p.mode === 'roles') return p.candidates.map(c => c[0] + '|N|').join('\n');
+      const ids = new Set(p.roles.map(r => r.id));
+      let prev = 'N';
+      return p.lines.map(([n, text]) => { const w = text.split('：')[0]; const lab = ids.has(w) ? 'S|' + w : (prev === 'S' || prev === 'C') && !/^[（(]/.test(text) ? 'C|' : 'N|'; prev = lab[0]; return n + '|' + lab; }).join('\n');
+    };
+    const r = await T.runPipeline({ lines, callApi, concurrency: 1, chunkSize: 150 });
+    const L = r.scenes.flatMap(s => s.lines), songs = L.filter(l => l.song !== undefined);
+    eq(songs.length, 1, '音樂提示後的歌詞收成一首');
+    eq(songs[0].lyrics, ['來吧一齊唱', '讓歌聲飛翔', '（輕輕和唱）', '終必飛到天邊外', 'Jingle Bells Jingle Bells, jingle with the sleigh'], '括號回聲行夾在歌詞中間算歌詞；「終必…」不是劇末標記；英文長歌詞行（含空白超過 40 字元）算；演員名單與「全劇完」不算');
+    ok(L.some(l => l.s === '乙' && /我哋一齊唱啦/.test(l.t)), '前一行的台詞仍在，歌詞沒有被併進它的續行');
+    ok(!L.some(l => l.s !== undefined && /來吧一齊唱|Jingle/.test(l.t)), '歌詞沒有變成台詞');
   }
   // 不是音樂劇的劇本：不誤判成歌曲（離地範例劇本各版面、模型完美）
   {
