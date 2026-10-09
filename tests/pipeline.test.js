@@ -186,6 +186,19 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
     const ql = mkl(qr.map(x => x[0])), qlab = new Map(qr.map((x, i) => [i + 1, { label: x[1], role: x[1] === 'S' ? x[0].split('：')[0] : '' }]));
     eq(T.trimNonScript(ql, qlab).quotes, 0, '台詞大多以引號起頭（≥10%）：不當引文');
   }
+  // 中線省略號 ⋯（U+22EF）：組回時正規化成 …（t、指示 d、歌詞），含指示的原文 r 與雜訊 x 保留原樣
+  {
+    const L = (n, text) => ({ n, text });
+    const lab = (...xs) => new Map(xs.map(([n, label, role]) => [n, { label, role: role || '' }]));
+    const lines = [L(1, '偉：（笑）好耐無見\u22EF\u22EF你好嗎'), L(2, '偉：而家\u22EF\u22EF'), L(3, '（燈暗\u22EF\u22EF）'), L(4, '(合)　出發吧\u22EF\u22EF'), L(5, '(合)　向前行'), L(6, '- \u22EF -')];
+    const r = T.assemble(lines, lab([1, 'S', '偉'], [2, 'S', '偉'], [3, 'D'], [4, 'Y'], [5, 'Y'], [6, 'N']), roles);
+    const ls = r.scenes[0].lines;
+    eq(ls[0], { s: '偉', t: '好耐無見……你好嗎', r: '（笑）好耐無見\u22EF\u22EF你好嗎' }, '台詞 t 正規化、r 保留原文');
+    eq(ls[1].t, '而家……', '台詞正規化');
+    eq(ls[2], { d: '（燈暗……）' }, '指示正規化');
+    eq(ls[ls.length - 1], { x: '- \u22EF -' }, '雜訊保留原樣');
+    eq(T.normPunct('\u22EF\u22EF……'), '…………', '只換 U+22EF，已經是 … 的不動');
+  }
   // 人物表、幕尾標記、括號折行（論文式劇本 PDF 剩下的錯誤型態；通用規則）
   {
     const mkl = arr => arr.map((t, i) => ({ n: i + 1, text: t }));

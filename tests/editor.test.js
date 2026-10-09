@@ -23,6 +23,11 @@ eq(TSE.makeLine('S', ['偉'], '我係⟦あ⟧人'), { s: '偉', t: '我係⟦�
 eq(TSE.makeLine('S', ['偉'], '（笑）⟦はい⟧'), { s: '偉', t: '⟦はい⟧', r: '（笑）はい' }, 'r 不含標記');
 eq(TSE.makeLine('D', [], '⟦x⟧（燈亮）'), { d: 'x（燈亮）' }, '指示不留標記');
 eq(TSE.makeLine('X', [], '- 3 -'), { x: '- 3 -' }, '雜訊');
+eq(TSE.makeLine('S', ['偉'], '好耐無見\u22EF\u22EF你好嗎'), { s: '偉', t: '好耐無見……你好嗎' }, '中線省略號 ⋯ 正規化成 …（朗讀與比對的標點表只認 …）');
+eq(TSE.makeLine('S', ['偉'], '（笑）好耐無見\u22EF\u22EF'), { s: '偉', t: '好耐無見……', r: '（笑）好耐無見\u22EF\u22EF' }, 'r 保留原文的 ⋯');
+eq(TSE.makeLine('D', [], '燈暗\u22EF\u22EF'), { d: '燈暗……' }, '指示也正規化');
+eq(TSE.makeLine('Y', null, '唱到\u22EF\u22EF\n再唱').lyrics, ['唱到……', '再唱'], '歌詞也正規化');
+eq(TSE.makeLine('X', [], '\u22EF'), { x: '\u22EF' }, '雜訊保留原樣');
 assert.throws(() => TSE.makeLine('S', [], '甲'), /角色/); n++;
 {
   const d = mk();

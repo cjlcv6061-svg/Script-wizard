@@ -41,7 +41,7 @@ function scoreLabels(lines, labels, gold) {
 }
 
 // 端到端：組回的劇本 vs 原劇本（逐行 [S|角色|台詞] 或 [D|指示]；台詞忽略日文標記與空白）
-const noMarks = s => String(s || '').replace(/[⟦⟧]/g, '');
+const noMarks = s => String(s || '').replace(/[⟦⟧]/g, '').replace(/\u22EF/g, '\u2026');      // ⋯ 與 … 視為同一個字（組回時會正規化）
 function flattenOriginal(scenes) {
   const out = [];
   for (const sc of scenes) for (const l of sc.lines) out.push(l.d !== undefined ? 'D|' + noMarks(l.d) : 'S|' + roleKey(l.s) + '|' + noMarks(l.t));
