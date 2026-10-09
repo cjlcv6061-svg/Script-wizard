@@ -1355,9 +1355,23 @@ const TSP=(function(){
       if(last && Math.abs(last.y-it.y)<=tol){ last.items.push(it); }
       else rows.push({y:it.y, items:[it]});
     }
+    for(const r of rows) r.items.sort((a,b)=>a.x-b.x);
+    // 左欄寫說話者、右欄寫台詞、中間沒有冒號的版面（論文式劇本、表格式劇本）：
+    // 整頁有一組固定的（名字欄 x，台詞欄 x），且至少 4 行、占有字行數的 20% 以上，就在名字後補「：」。
+    const nameCell=r=>{
+      const ns=r.items.filter(i=>i.str.trim()); if(ns.length<2) return null;
+      const a=ns[0], b=ns[1], nm=a.str.replace(/\s+/g,'');
+      if(!nm || nm.length>6 || /[：:。！？，,.!?)）]$/.test(nm) || /^[\d(（]/.test(nm) || SCENE_NO_RE.test(nm)) return null;       // 「第一場　求神 …… 5」這種目錄不是說話者欄
+      if(b.x-(a.x+a.w)<Math.max(5,a.fs*0.7)) return null;                       // 名字與台詞之間要有明顯的欄距
+      return {a, key:Math.round(a.x)+'|'+Math.round(b.x)};
+    };
+    const keyCount=new Map(); let textRows=0;
+    for(const r of rows){ if(r.items.some(i=>i.str.trim())) textRows++; const c=nameCell(r); if(c) keyCount.set(c.key,(keyCount.get(c.key)||0)+1); }
+    let colKey=null;
+    for(const [k,n] of keyCount) if(n>=4 && n>=textRows*0.2 && (!colKey || n>keyCount.get(colKey))) colKey=k;
     for(const r of rows){
-      r.items.sort((a,b)=>a.x-b.x);
       let s='', prev=null;
+      const nc=colKey?nameCell(r):null, colA=nc && nc.key===colKey ? nc.a : null;
       for(const it of r.items){
         if(prev){
           const gap=it.x-(prev.x+prev.w);
@@ -1365,11 +1379,26 @@ const TSP=(function(){
           if(needSpace) s+=' ';
         }
         s+=it.str; prev=it;
+        if(it===colA) s+='：';
       }
       s=s.replace(/\s+$/,'').replace(/^\s+/,'');
       if(s) out.push(s);
     }
     return out;
+  }
+  // 每個字之間都有空白（PDF 字距排版：「阿 宏 學 長 去 哪 阿 ！」）：整份文件裡「中日文字－空白－中日文字」的比例超過一半，
+  // 就去掉夾在文字之間的空白（兩側至少一邊是中日文字或全形符號；數字與數字之間也去）。英文字母之間的空白無法判斷字界，保留。
+  const CJK_CH=new RegExp('['+CJK_C+']');
+  function despaceCjkPages(pages){
+    let sp=0, ad=0;
+    const reSp=new RegExp('['+CJK_C+'] ['+CJK_C+']','g'), reAd=new RegExp('['+CJK_C+']['+CJK_C+']','g');
+    for(const p of pages) for(const l of p){ sp+=(l.match(reSp)||[]).length; ad+=(l.match(reAd)||[]).length; }
+    if(sp+ad<200 || sp/(sp+ad)<=0.5) return pages;
+    const fix=l=>l.replace(/(\S)[ \t　]+(?=(\S))/g,(m,a,b)=>{
+      const c=CJK_CH.test(a)||CJK_CH.test(b), dd=/\d/.test(a)&&/\d/.test(b);
+      return (c||dd)?a:a+' ';
+    });
+    return pages.map(p=>p.map(fix));
   }
 
   // 去 PDF 頁眉頁尾與頁碼。pages: string[][]（每頁的行）。
@@ -1478,7 +1507,7 @@ const TSP=(function(){
     let lines, removed=[], scanned=false;
     if(input.pages){
       scanned=looksScanned(input.pages);
-      const c=cleanPdfPages(input.pages);
+      const c=cleanPdfPages(despaceCjkPages(input.pages));
       removed=c.removed;
       lines=pagesToLines(c.pages);
     }else{

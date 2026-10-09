@@ -127,4 +127,32 @@ ok(!T.looksScanned([['偉：你好嗎，今日天氣好好呀，你去咗邊度�
   ok(two.removed.length === 0, '只出現 2 次不夠判斷');
 }
 
+// ---- 左欄說話者／右欄台詞（沒有冒號）、字距空白 ----
+{
+  const it = (str, x, y, w, fs = 12) => ({ str, transform: [fs, 0, 0, fs, x, y], width: w });
+  const rowsOf = (n, name, body) => { const o = []; for (let i = 0; i < n; i++) { const y = 700 - i * 20; o.push(it(name[i % name.length], 113.6, y, 27.6), it(' ', 141.2, y, 11.5), it(body + i, 152.7, y, 100)); } return o; };
+  const col = T.itemsToLines(rowsOf(8, ['阿 宏', '阿 南'], '學 長 去 哪 '));
+  ok(col.length === 8 && col.every(l => /^阿 [宏南]：/.test(l)), '名字欄＋台詞欄的版面：名字後補「：」：' + col[0]);
+  // 續行（只有台詞欄）不補
+  const withCont = T.itemsToLines(rowsOf(8, ['阿宏'], '台詞').concat([it('接下去的一行', 152.7, 500, 80)]));
+  ok(withCont[withCont.length - 1] === '接下去的一行', '只有台詞欄的續行不補冒號');
+  // 只有幾行、或不是固定欄位：不補
+  const few = T.itemsToLines(rowsOf(3, ['阿宏'], '台詞'));
+  ok(few.every(l => !/：/.test(l)), '少於 4 行不算欄位版面：' + few[0]);
+  const ragged = []; for (let i = 0; i < 8; i++) ragged.push(it('阿宏', 100 + i * 7, 700 - i * 20, 24), it('台詞' + i, 160 + i * 11, 700 - i * 20, 60));
+  ok(T.itemsToLines(ragged).every(l => !/：/.test(l)), '名字欄／台詞欄 x 不固定：不補');
+  // 目錄（第X場　標題 …… 頁碼）不是說話者欄
+  const toc = []; for (let i = 0; i < 8; i++) toc.push(it('第' + '一二三四五六七八'[i] + '場', 100, 700 - i * 20, 40), it('標題' + i + ' ........ ' + (i * 3 + 5), 160, 700 - i * 20, 120));
+  ok(T.itemsToLines(toc).every(l => !/：/.test(l)), '目錄的「第X場」不補冒號');
+  // 已有冒號的名字不重複補
+  const colon = []; for (let i = 0; i < 6; i++) colon.push(it('阿宏：', 100, 700 - i * 20, 36), it('台詞' + i, 150, 700 - i * 20, 60));
+  ok(T.itemsToLines(colon).every(l => /^阿宏：[^：]/.test(l)), '名字已帶冒號就不補');
+  // 字距空白：整份文件多數是「字 字」才去空白
+  const spaced = []; for (let i = 0; i < 40; i++) spaced.push('阿 宏 ： ( 嚇 醒 ) 學 長 你 怎 麼 在 這 。 約 5 0 歲 L e t ’ s ！');
+  const sp = T.buildLines({ pages: [spaced.slice(0, 20), spaced.slice(20)] }).lines;
+  eq(sp[0].text, '阿宏：(嚇醒)學長你怎麼在這。約50歲L e t ’ s！', '去掉字距空白（英文字母之間保留）');
+  const normal = []; for (let i = 0; i < 60; i++) normal.push('阿宏：你好呀，今日點呀？ Hello world ' + i);
+  eq(T.buildLines({ pages: [normal.slice(0, 30), normal.slice(30)] }).lines[0].text, '阿宏：你好呀，今日點呀？ Hello world 0', '一般文件（沒有字距）完全不動');
+}
+
 console.log(`✓ parser.test.js：${n} 項通過`);
