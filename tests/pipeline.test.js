@@ -111,6 +111,30 @@ const roles = ROLES.map(r => ({ id: r.id, name: r.name, aliases: r.alias.filter(
 }
 
 
+// ---- 拉丁字母的名字：帶重音（María、Valérie）、較長的括號註記、「Name： – 」變體（西語／法語劇本）----
+{
+  const mk = arr => arr.map((x, i) => ({ n: i + 1, text: x }));
+  const rl = (...ids) => ids.map(id => ({ id, name: id, aliases: [], gender: 'n' }));
+  const kinds = t => { const m = T.pfxMatch ? T.pfxMatch(t, null) : null; return m && m.kind; };
+  // 名字中間有重音字母：原本只認 ASCII，「María」被當成「Mar」＋非拉丁字元＋「a」而整個不認
+  const body = [];
+  for (let i = 0; i < 20; i++) body.push('María – ¿Dígame ' + i + '?', 'Pedro – Sí ' + i, 'Valérie (off) – Oui ' + i, 'Françoise: Bonjour ' + i);
+  const d = T.detectPrefix(mk(body), rl('María', 'Pedro', 'Valérie', 'Françoise'));
+  ok(d.on, '帶重音的名字：前綴格式啟用');
+  eq(d.prefixLines, 80, '帶重音的名字（María、Valérie、Françoise）每行都算前綴行');
+  eq(d.roles.map(r => r.id), ['María', 'Pedro', 'Valérie', 'Françoise'], '帶重音的名字都留在角色清單');
+  // 括號註記超過 20 個字元（西語的舞台提示常是一小句話）、冒號後面緊接破折號的變體：和「Pedro – 」同一種風格
+  const mixed = [];
+  for (let i = 0; i < 20; i++) mixed.push('María – A' + i, 'Pedro (imitando irónicamente la amabilidad de María) – B' + i, 'María： – C' + i, 'Pedro： (irónico) – D' + i);
+  const dm = T.detectPrefix(mk(mixed), rl('María', 'Pedro'));
+  eq([dm.sep, dm.prefixLines], ['dash', 80], '長括號註記與「Name： – 」都算破折號風格的前綴行（不被當成冒號風格而拒絕）');
+  // 冒號風格的劇本不受影響：「甲：— 你好」仍是冒號
+  const colonDoc = []; for (let i = 0; i < 40; i++) colonDoc.push(i % 20 === 0 ? '甲：— 你好' + i : '甲：你好' + i, '乙：嗯' + i);
+  const dcol = T.detectPrefix(mk(colonDoc), rl('甲', '乙'));
+  eq(dcol.sep, 'colon', '冒號風格的劇本，偶爾有台詞以破折號開頭（2／80）：維持冒號風格');
+  eq(dcol.prefixLines, 80, '冒號風格時，以破折號開頭的那兩行仍是冒號前綴（sep 為 colon 時不重新分類）');
+}
+
 // ---- 候選稱呼表與分類結果 ----
 {
   const L = (n, text) => ({ n, text });
