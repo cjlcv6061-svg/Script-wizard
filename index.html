@@ -1295,6 +1295,8 @@ async function loadStats(role){
    PARSER-CORE:BEGIN
    ============================================================ */
 const TSP=(function(){
+  // 拉丁字母（含帶重音的 À–ÿ、拉丁擴充 A／B）；名字中間有重音字母（María、Valérie、Françoise）不能只認 ASCII
+  const LAT_L="A-Za-z\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u024F";
   // ---------- 前處理：取文字 → 編號行 ----------
   const MAX_LINES=20000;
 
@@ -1326,7 +1328,7 @@ const TSP=(function(){
   const VERT_MAP={'︵':'（','︶':'）','︷':'｛','︸':'｝','︹':'〔','︺':'〕','︻':'【','︼':'】','︽':'《','︾':'》','︿':'〈','﹀':'〉','﹁':'「','﹂':'」','﹃':'『','﹄':'』','︙':'…','︱':'—','︰':'：'};
   const fromVert=c=>VERT_MAP[c]||c.normalize('NFKC');
   const CJK_GAP=new RegExp('(?<=['+CJK_C+'])[ \\t]+(?=['+CJK_C+'])','g');
-  const LATIN_NAME=/^[A-Za-z][A-Za-z.'’-]*$/;                   // 說話者欄的名字（已去空白）全是拉丁字母
+  const LATIN_NAME=new RegExp("^["+LAT_L+"]["+LAT_L+".'’-]*$");                   // 說話者欄的名字（已去空白）全是拉丁字母
   // pdf.js 文字項目 → {str,x,y,fs,w,h,dir}；直排專用的標點字形先還原成一般標點
   function normItems(items){
     return items.filter(it=>it && typeof it.str==='string' && it.transform)
@@ -1865,7 +1867,8 @@ const TSP=(function(){
   const CONN_RE=/[〜～]/;
   const TILDE_RE=/~/;
   const PUNCT_RE=/[、。！？!?，,…‥「」『』\s　]/;
-  const LATIN_RE=/[A-Za-z0-9]/;
+  const LATIN_RE=new RegExp("["+LAT_L+"0-9]");
+  const LATIN_G=new RegExp("["+LAT_L+"]","g");
   function markJapanese(t){
     if(!t || t.indexOf('⟦')>=0 || !KANA_RE.test(t)) return t;
     const a=Array.from(t), n=a.length;
@@ -1989,19 +1992,19 @@ const TSP=(function(){
   // 模型卻可能把這種行標成續行或雜訊、把舞台指示標成台詞。
   // 所以：先數行首前綴（補上模型漏掉的角色），標記完成後再用前綴覆寫模型標錯的行。
   // 角色的顯示名稱無法由文字驗證，不去改它（校正頁可改）。
-  const PFX_CJK_CH='[^\\sA-Za-z0-9：:–—（(，。、！？!?"“”「」『』….\\/／&＆]';
+  const PFX_CJK_CH='[^\\s'+LAT_L+'0-9：:–—（(，。、！？!?"“”「」『』….\\/／&＆]';
   const PFX_CJK=PFX_CJK_CH+'{1,8}(?:[0-9０-９]{1,2})?';      // 結尾可以帶編號：「路人1」「村民2」（開頭不行，免得把「12:30」當成稱呼）
-  const PFX_LAT="[A-Za-z][A-Za-z.'’-]*(?: [A-Za-z][A-Za-z.'’-]*){0,2}";
+  const PFX_LAT="["+LAT_L+"]["+LAT_L+".'’-]*(?: ["+LAT_L+"]["+LAT_L+".'’-]*){0,2}";
   // 中英混合的稱呼（「亞Toy」「呂VO」「魔老VO」）：中文與英文字母相連
-  const PFX_MIX='(?:'+PFX_CJK_CH+'{1,6}[A-Za-z][A-Za-z.]{0,7}|[A-Za-z]{1,8}'+PFX_CJK_CH+'{1,6})';
+  const PFX_MIX='(?:'+PFX_CJK_CH+'{1,6}['+LAT_L+']['+LAT_L+'.]{0,7}|['+LAT_L+']{1,8}'+PFX_CJK_CH+'{1,6})';
   const PFX_VO='(?:'+PFX_CJK_CH+'{1,6}\\s?(?:V\\.?\\s?O\\.?|O\\.?\\s?S\\.?))';             // 「琳 O.S.」「良V.O.」：角色名＋畫外音標記（中間可以有一個空白）
   const PFX_TOK='(?:'+PFX_VO+'|'+PFX_MIX+'|'+PFX_CJK+'|'+PFX_LAT+')';
   // 行首「角色名（指示）：」「角色名 – 」；合說「偉、朗：」「玲／朗／K：」「A and B – 」整串算一個前綴。
   // 逗號不算合說的分隔符：句子裡的逗號太常見（「無人需要我留低，好自由，跟住我同自己講：」是一句台詞的續行）
-  const PFX_RE=new RegExp('^('+PFX_TOK+'(?:\\s*(?:[、\\/／&＆]|\\s+and\\s+)\\s*'+PFX_TOK+')*)(?:\\s*[（(][^）)]{0,20}[）)])?(?:\\s*([：:])\\s*\\S|\\s([–—-])\\s+\\S)');
+  const PFX_RE=new RegExp('^('+PFX_TOK+'(?:\\s*(?:[、\\/／&＆]|\\s+and\\s+)\\s*'+PFX_TOK+')*)(?:\\s*[（(][^）)]{0,60}[）)])?(?:\\s*([：:])\\s*\\S|\\s([–—-])\\s+\\S)');
   // 行首前綴的分析：{toks:[稱呼…], kind:'colon'|'dash'}。人物表常見「王家輝 – 王良的大姪兒，男，10歲」（破折號＝簡介），
   // 台詞卻用冒號；所以前綴風格（colon／dash）要看整份劇本哪一種占絕大多數，另一種不算前綴（sep 為 'mixed' 時兩種都算）。
-  const PFX_DASH_LOOSE_RE=/^([A-Za-z][A-Za-z.'’]*(?: [A-Za-z][A-Za-z.'’]*){0,2})(?:\s+[–—-]\s*|\s*[–—-]\s+)\S/;
+  const PFX_DASH_LOOSE_RE=new RegExp("^(["+LAT_L+"]["+LAT_L+".'’]*(?: ["+LAT_L+"]["+LAT_L+".'’]*){0,2})(?:\\s+[–—-]\\s*|\\s*[–—-]\\s+)\\S");
   const PFX_COMMA_RE=/^([^\s：:，,、\/／&＆（(]{1,8}(?:\s*[，,]\s*[^\s：:，,、\/／&＆（(]{1,8})+)\s*[：:]\s*\S/;
   function pfxMatch(text, sep, surf){
     const m=text.match(PFX_RE);
@@ -2014,7 +2017,9 @@ const TSP=(function(){
       if(d && surfGet(surf,d[1])) return {toks:[d[1]], kind:'dash'};
       return null;
     }
-    const kind=m[2]?'colon':'dash';
+    let kind=m[2]?'colon':'dash';
+    // 「Pedro： – 」「Pedro： (irónico) – 」：冒號後面緊接破折號，是同一份劇本裡「Pedro – 」的變體，算破折號風格（冒號風格的劇本不動）
+    if(kind==='colon' && sep!=='colon' && /^\s*(?:[（(][^）)]{0,60}[）)]\s*)?[–—-]\s/.test(text.slice(m[0].length-1))) kind='dash';
     if(sep && sep!=='mixed' && kind!==sep) return null;
     const toks=m[1].split(SPK_SEP).map(x=>x.trim()).filter(Boolean);
     return toks.some(t=>/^https?$/i.test(t))?null:{toks, kind};
@@ -2223,7 +2228,7 @@ const TSP=(function(){
       if(/^\s*[（(][^\t]*[)）]\s*$/.test(t) && !SONG_TAG_RE.test(t)) return (!/[。]/.test(t) && songWeight(t)<=24 && !SONG_CUE_END_RE.test(t))?2:0;   // 整行括號＝多半是舞台指示
       if(SONG_CREDIT_RE.test(t)) return 1;                                               // 作曲／版權行可以很長
       if(songWeight(t)>SONG_MAX_LINE) return 0;
-      if((t.match(/[A-Za-z]/g)||[]).length>(t.match(/[⺀-鿿]/g)||[]).length && (t.match(/[,，、]/g)||[]).length>=3) return 0;    // 英文人名列表（演員表）不是歌詞
+      if((t.match(LATIN_G)||[]).length>(t.match(/[⺀-鿿]/g)||[]).length && (t.match(/[,，、]/g)||[]).length>=3) return 0;    // 英文人名列表（演員表）不是歌詞
       if(L==='C' && dir<0 && i>0 && lab(i-1)==='S') return 0;                            // 這行是前一句台詞的續行
       return (t.replace(/\s+/g,'').length>=2 || SONG_TAG_RE.test(t))?1:0;
     };
